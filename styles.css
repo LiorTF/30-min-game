@@ -214,6 +214,10 @@ p{margin:0}
   border-block-start:1px solid var(--line);
 }
 .roster li:first-child{border-block-start:0}
+.roster--dense li{padding-block:7px;gap:var(--s2)}
+.roster--dense .seat{inline-size:24px;block-size:24px;font-size:10px}
+.roster--dense .roster__name{font-size:var(--t-sm)}
+.roster--dense .score{font-size:17px}
 .roster li.is-me .roster__name{color:var(--red-lit)}
 .seat{
   flex:none;inline-size:28px;block-size:28px;display:grid;place-items:center;border-radius:50%;
@@ -313,9 +317,14 @@ p{margin:0}
 .clues__w--second{color:var(--bone-2);font-size:19px}
 .clues__w--second::before{content:"·";color:var(--ash-2);margin-inline-end:var(--s3)}
 .clues li.is-imp .clues__w{color:var(--red-lit)}
+.clues--dense li{padding:9px var(--s3)}
+.clues--dense .clues__w{font-size:18px}
+.clues--dense .clues__w--second{font-size:16px}
+.clues--dense .clues__who{font-size:9px}
 
 /* ---------- vote grid ---------- */
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:var(--s2)}
+@media (min-width:560px){.grid{grid-template-columns:repeat(3,1fr)}}
 .pick{
   appearance:none;cursor:pointer;text-align:start;color:var(--bone);
   background:var(--ink-1);border:1px solid var(--line);border-radius:2px;padding:14px;
@@ -326,6 +335,16 @@ p{margin:0}
 .pick[aria-pressed="true"]{border-color:var(--red);background:rgba(206,18,41,.15)}
 .pick:disabled{opacity:.42;cursor:not-allowed}
 .pick small{font:400 10px/1 var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--ash)}
+.pick__name{display:flex;align-items:center;gap:6px;overflow-wrap:anywhere}
+.pick__name .muted{font-weight:400;font-size:var(--t-sm)}
+.pick__clue{
+  font-family:var(--serif);font-weight:500;font-size:var(--t-sm);line-height:1.3;
+  color:var(--bone-2);overflow-wrap:anywhere;
+}
+/* a quiet mark for a vote already cast, so the count is readable at a glance */
+.pick.is-voted .pick__name::before{
+  content:"";flex:none;inline-size:5px;block-size:5px;border-radius:50%;background:var(--good);
+}
 .pick--word{align-items:center;text-align:center;font-family:var(--serif);font-weight:800;font-size:19px;padding:18px 12px}
 
 /* ---------- verdict ---------- */
@@ -389,6 +408,10 @@ p{margin:0}
   color:var(--ash);text-align:center;
 }
 .status b{color:var(--bone);font-variant-numeric:tabular-nums}
+.waitlist{
+  text-align:center;color:var(--ash-2);font-size:var(--t-sm);line-height:1.4;
+  margin-block-start:-10px;overflow-wrap:anywhere;
+}
 .chips{display:flex;flex-wrap:wrap;gap:7px}
 .chip{
   font:600 var(--t-xs)/1 var(--sans);border:1px solid var(--line);border-radius:2px;

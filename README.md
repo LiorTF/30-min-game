@@ -15,13 +15,17 @@ reveal at once, the table argues, everyone votes.
   worth **2** if right
 - Voted correctly while the table got it wrong → **1 point** anyway
 
-Options the host sets per room: one or two impostors (two unlock at seven players),
-one or two clue rounds, and a target score of 8, 12, 20 or no finish line. In a
-two-clue round everyone sees the first clues before writing their second, which
+Options the host sets per room: **one, two or three impostors** (a second unlocks at
+seven players, a third at ten), one or two clue rounds, and a target score of 8, 12, 20
+or no finish line. In a two-clue round everyone sees the first clues before writing their second, which
 changes the game completely — the impostor now has something to work with, and the
 rest of the table has to decide how much more to give away.
 
-Best with 4–10 players. A round runs about four minutes.
+Works from 3 players up. It is at its best from 7 upward, where two or three impostors
+can hide in the noise — at that size the interface adapts: the roster and the clue list
+tighten, every vote button carries that player's own clues so nobody has to hold twelve
+of them in their head, and the round names whoever is still holding it up instead of
+leaving the table guessing. A round runs about four minutes.
 
 ## Running it
 
@@ -58,12 +62,13 @@ collide. If the host's device goes quiet for 30 seconds, any other player can ta
 ## Tests
 
 ```
-node tests/rules.test.js      # 51 assertions — scoring, voting, clue validation, the deck
+node tests/rules.test.js      # 63 assertions — scoring, voting, clue validation, the deck
 node tests/play.test.js       # 46 assertions — a full four-player round, end to end
 node tests/play-big.test.js   # 24 assertions — seven players, two impostors, a tied vote
+node tests/play-huge.test.js  # 26 assertions — twelve players, three impostors
 ```
 
-The two `play` suites run real browsers: one context per player, all of them sharing a
+The three `play` suites run real browsers: one context per player, all of them sharing a
 single in-memory stand-in for the `db` capability (`tests/mock-db.js`), so a round is
 actually played through every phase — cards revealed, clues written and refused, votes
 cast, the impostor's last guess, points awarded, the host walking away and someone else

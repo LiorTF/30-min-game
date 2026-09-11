@@ -141,8 +141,17 @@ var Rules = {
     return { ok: true, value: v.slice(0, 22) };
   },
 
-  /* Two impostors need a crowd to hide in. */
-  maxImpostors: function (n) { return n >= 7 ? 2 : 1; },
+  /* Impostors need a crowd to hide in. One is right for a small table;
+     a second becomes possible once there are seven, and a third at ten —
+     beyond that the clues get too noisy to read. */
+  maxImpostors: function (n) {
+    if (n >= 10) return 3;
+    if (n >= 7) return 2;
+    return 1;
+  },
+
+  /* The table size at which each impostor count unlocks, for the lobby note. */
+  impostorsUnlockAt: function (count) { return count >= 3 ? 10 : (count >= 2 ? 7 : 0); },
 
   code: function () {
     var A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", s = "";

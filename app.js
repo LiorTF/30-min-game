@@ -100,6 +100,7 @@
     });
   }
   function $(id) { return document.getElementById(id); }
+  function fill(s, n) { return String(s).replace("{n}", n); }
 
   /* roster helpers */
   function me() { for (var i = 0; i < S.seats.length; i++) if (S.seats[i].id === Prefs.id) return S.seats[i]; return null; }
@@ -115,6 +116,28 @@
     var h = seatOf(S.room.hostId);
     return !h || away(h);
   }
+  /* Everyone still holding the round up. At four players you can see who it
+     is across the table; at twelve you cannot, so name them. */
+  function outstanding() {
+    if (!S.room) return [];
+    var r = S.room, list = roster();
+    if (r.phase === "reveal") return list.filter(function (p) { return !p.ready; });
+    if (r.phase === "clues") {
+      var f = r.clueRound === 2 ? "clue2" : "clue";
+      return list.filter(function (p) { return !(p[f] || "").trim(); });
+    }
+    if (r.phase === "vote") return list.filter(function (p) { return !p.vote; });
+    return [];
+  }
+  function waitingLine() {
+    var left = outstanding(), L = T();
+    if (!left.length) return "";
+    var shown = left.slice(0, 3).map(function (p) { return p.name; }).join(", ");
+    if (left.length > 3) shown += " " + fill(L.andMore, left.length - 3);
+    /* the label carries its own separator: Hebrew joins with a maqaf, English with a space */
+    return '<p class="waitlist">' + esc(L.waitingOn) + esc(shown) + "</p>";
+  }
+
   function settings() {
     var s = (S.room && S.room.settings) || {};
     return { impostors: s.impostors || 1, clueRounds: s.clueRounds || 2, target: s.target == null ? 12 : s.target };
@@ -450,7 +473,7 @@
             return (b.score || 0) - (a.score || 0) || (a.joinedAt || 0) - (b.joinedAt || 0);
           })
         : S.seats;
-      return '<ul class="roster">' + list.map(function (p, i) {
+      return '<ul class="roster' + (S.seats.length > 8 ? ' roster--dense' : '') + '">' + list.map(function (p, i) {
         var tags = "";
         if (r && r.hostId === p.id) tags += '<span class="tag tag--host">' + esc(L.host) + '</span>';
         if (away(p)) tags += '<span class="tag tag--away">' + esc(L.away) + '</span>';
@@ -520,8 +543,12 @@
         '<section class="panel enter">',
         '<p class="kicker kicker--quiet">', esc(L.settings), '</p>',
         '<div class="setting"><span class="field__label">', esc(L.setImp), '</span>',
-        '<div class="seg">', seg("impostors", 1, cfg.impostors, L.setImp1), seg("impostors", 2, cfg.impostors, L.setImp2, maxImp < 2), '</div>',
-        maxImp < 2 ? '<p class="note">' + esc(L.setImpNote) + '</p>' : '',
+        '<div class="seg">',
+        seg("impostors", 1, cfg.impostors, L.setImp1),
+        seg("impostors", 2, cfg.impostors, L.setImp2, maxImp < 2),
+        seg("impostors", 3, cfg.impostors, L.setImp3, maxImp < 3),
+        '</div>',
+        maxImp < 3 ? '<p class="note">' + esc(L.setImpNote) + '</p>' : '',
         '</div>',
         '<div class="setting"><span class="field__label">', esc(L.setRounds), '</span>',
         '<div class="seg">', seg("clueRounds", 1, cfg.clueRounds, L.setRounds1), seg("clueRounds", 2, cfg.clueRounds, L.setRounds2), '</div>',
@@ -559,7 +586,8 @@
       if (!m || !m.inRound) return View.waitingRoom();
       var sec = secret(), imp = amImpostor(), list = roster();
       var readyN = list.filter(function (p) { return p.ready; }).length;
-      var two = imps().length > 1;
+      var others = imps().length - 1;
+      var company = others === 1 ? " " + L.impHint2 : (others > 1 ? " " + fill(L.impHint3, others) : "");
       return [
         View.steps(),
         '<section class="block enter">',
@@ -574,11 +602,11 @@
         '<div class="flip__face flip__front', imp ? ' is-imp' : '', '">',
         '<p class="hint">', esc(sec.cat), '</p>',
         '<div class="flip__word">', esc(imp ? L.youAreImp : sec.word), '</div>',
-        imp ? '<p class="hint hint--wide">' + esc(L.impHint) + (two ? " " + esc(L.impHint2) : "") + '</p>' : '',
+        imp ? '<p class="hint hint--wide">' + esc(L.impHint + company) + '</p>' : '',
         '</div></div></div>',
 
         m.ready
-          ? '<p class="status"><b>' + readyN + '</b>/' + list.length + ' ' + esc(L.readyState) + ' · ' + esc(L.waitingReady) + '</p>'
+          ? '<p class="status"><b>' + readyN + '</b>/' + list.length + ' ' + esc(L.readyState) + '</p>' + waitingLine()
           : '<button class="btn enter" type="button" id="btnReady">' + esc(L.ready) + '</button>',
         View.hostTools()
       ].join("");
@@ -611,7 +639,7 @@
         mine
           ? '<section class="panel enter"><p class="kicker kicker--quiet">' + esc(L.sent) + '</p>' +
             '<p class="serif" style="font-size:26px">' + esc(mine) + '</p></section>' +
-            '<p class="status"><b>' + sentN + '</b>/' + list.length + ' · ' + esc(L.waitingClues) + '</p>'
+            '<p class="status"><b>' + sentN + '</b>/' + list.length + ' · ' + esc(L.waitingClues) + '</p>' + waitingLine()
           : '<div class="block enter">' +
             '<input class="input' + (S.clueError ? ' input--bad' : '') + '" type="text" id="clueIn" maxlength="22" ' +
             'autocomplete="off" spellcheck="false" aria-label="' + esc(second ? L.clueTitle2 : L.clueTitle) + '" ' +
@@ -627,8 +655,11 @@
 
     clueList: function (only) {
       var order = (S.room.order || []).filter(function (id) { return !!seatOf(id); });
+      /* A dozen clues is a lot of screen. Past eight players the rows tighten
+         so the whole table still reads as one block. */
+      var dense = order.length > 8 ? " clues--dense" : "";
       var showImp = ["results", "champion"].indexOf(S.room.phase) !== -1;
-      return '<ul class="clues">' + order.map(function (id) {
+      return '<ul class="clues' + dense + '">' + order.map(function (id) {
         var p = seatOf(id);
         var isImp = showImp && imps().indexOf(id) !== -1;
         var first = p.clue || "—";
@@ -648,7 +679,7 @@
       var L = T(), m = me(), list = roster();
       var votedN = list.filter(function (p) { return p.vote; }).length;
       var mine = m && m.vote;
-      var two = imps().length > 1;
+      var many = imps().length > 1;
       return [
         View.steps(),
         '<section class="block enter">',
@@ -657,20 +688,25 @@
         '</section>',
         '<section class="block enter">',
         '<h2>', esc(L.voteTitle), '</h2>',
-        '<p class="note">', esc(L.voteSub), two ? ' ' + esc(L.voteSub2) : '', '</p>',
+        '<p class="note">', esc(L.voteSub), many ? ' ' + esc(fill(L.voteSub2, imps().length)) : '', '</p>',
         '</section>',
         m && m.inRound
           ? '<div class="grid enter">' + list.map(function (p) {
+              /* Each button carries that player's own clues. At a big table
+                 nobody can hold twelve clues in their head while scrolling. */
+              var said = [p.clue, p.clue2].filter(function (w) { return (w || "").trim(); }).join(" · ");
               return [
-                '<button class="pick" type="button" data-vote="', esc(p.id), '" aria-pressed="', mine === p.id, '"',
+                '<button class="pick', p.vote ? ' is-voted' : '', '" type="button" data-vote="', esc(p.id),
+                '" aria-pressed="', mine === p.id, '"',
                 (mine || p.id === Prefs.id) ? ' disabled' : '', '>',
-                '<span>', esc(p.name), '</span>',
-                '<small>', esc(p.id === Prefs.id ? L.you : (p.vote ? L.voted : "—")), '</small>',
+                '<span class="pick__name">', esc(p.name), p.id === Prefs.id ? ' <span class="muted">· ' + esc(L.you) + '</span>' : '', '</span>',
+                '<span class="pick__clue">', esc(said || "—"), '</span>',
                 '</button>'
               ].join("");
             }).join("") + '</div>'
           : '',
         '<p class="status"><b>', votedN, '</b>/', list.length, ' · ', esc(mine ? L.locked : L.waitingVotes), '</p>',
+        mine ? waitingLine() : '',
         View.hostTools()
       ].join("");
     },

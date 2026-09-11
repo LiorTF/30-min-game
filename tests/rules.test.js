@@ -115,6 +115,18 @@ const board = (...rows) => rows.map(([id, vote]) => ({ id, vote }));
   const s = R.score(board(["p0", ""], ["p1", "p0"]), ["p0"], "", false);
   eq("both impostors score when nobody is caught", s.p0, 3);
 }
+{
+  /* a big table: three impostors, p0 is caught and guesses right */
+  const s = R.score(
+    board(["p0", "p4"], ["p1", "p5"], ["p2", "p0"], ["p3", "p0"], ["p4", "p1"], ["p5", "p0"]),
+    ["p0", "p1", "p2"], "p0", true);
+  eq("the caught impostor still takes 2 for a right guess", s.p0, 2);
+  eq("the second impostor escapes with 3", s.p1, 3);
+  eq("the third impostor escapes with 3 even after voting for a fellow impostor", s.p2, 3);
+  eq("an innocent who named the caught impostor takes 2", s.p3, 2);
+  eq("an innocent who named an uncaught impostor also takes 2", s.p4, 2);
+  eq("an innocent who named the caught impostor takes 2 as well", s.p5, 2);
+}
 
 /* ---------- checkClue ---------- */
 group("checkClue");
@@ -142,8 +154,14 @@ eq("long clues are trimmed to 22", clue("א".repeat(40), "פלאפל").value.len
 
 /* ---------- misc ---------- */
 group("table size");
+eq("three players allow one impostor", R.maxImpostors(3), 1);
 eq("six players allow one impostor", R.maxImpostors(6), 1);
 eq("seven players unlock two", R.maxImpostors(7), 2);
+eq("nine players still cap at two", R.maxImpostors(9), 2);
+eq("ten players unlock three", R.maxImpostors(10), 3);
+eq("a very big table still caps at three", R.maxImpostors(20), 3);
+eq("the lobby note knows where two unlocks", R.impostorsUnlockAt(2), 7);
+eq("the lobby note knows where three unlocks", R.impostorsUnlockAt(3), 10);
 ok("room codes are four unambiguous characters", (() => {
   for (let i = 0; i < 500; i++) if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/.test(R.code())) return false;
   return true;
