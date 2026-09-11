@@ -1,0 +1,156 @@
+/* ============================================================
+   Suspect — game rules
+   Pure functions only: no DOM, no network, no clock. Everything the
+   game decides — which word, who scores, whether a clue is legal —
+   lives here so it can be reasoned about and tested on its own.
+   Runs in the browser (attaches to window) and under node (exports).
+   ============================================================ */
+(function (root) {
+  "use strict";
+  var DECK = root.SUSPECT_DECK || (typeof require === "function" ? require("./deck.node.js") : []);
+
+/* ---------------------------------------------------------
+   Rules — pure functions, all independently testable
+   --------------------------------------------------------- */
+var Rules = {
+  /* Pick a word the room has not used yet, avoiding the previous
+     category so consecutive rounds don't feel repetitive. */
+  pickWord: function (used, lastCat) {
+    var pool = [];
+    for (var c = 0; c < DECK.length; c++) {
+      if (DECK.length > 1 && c === lastCat) continue;
+      for (var w = 0; w < DECK[c].w.length; w++) {
+        if (used.indexOf(c + ":" + w) === -1) pool.push([c, w]);
+      }
+    }
+    if (!pool.length) {
+      /* every word used — start the deck over */
+      c = Math.floor(Math.random() * DECK.length);
+      return { cat: c, word: Math.floor(Math.random() * DECK[c].w.length), wrapped: true };
+    }
+    var hit = pool[Math.floor(Math.random() * pool.length)];
+    return { cat: hit[0], word: hit[1], wrapped: false };
+  },
+
+  /* Six options for a caught impostor: the real word plus five decoys
+     from the same category, so the guess is a real read, not a coin flip. */
+  guessOptions: function (catIdx, wordIdx) {
+    var pool = [], i;
+    for (i = 0; i < DECK[catIdx].w.length; i++) if (i !== wordIdx) pool.push(i);
+    Rules.shuffle(pool);
+    return Rules.shuffle(pool.slice(0, 5).concat([wordIdx]));
+  },
+
+  shuffle: function (a) {
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1)), t = a[i];
+      a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  },
+
+  /* Plurality vote. A tie means nobody is accused and the impostor walks. */
+  tally: function (roster) {
+    var counts = {}, i, p;
+    for (i = 0; i < roster.length; i++) {
+      p = roster[i];
+      if (p.vote && p.vote !== "skip") counts[p.vote] = (counts[p.vote] || 0) + 1;
+    }
+    var top = 0, leaders = [];
+    Object.keys(counts).forEach(function (k) {
+      if (counts[k] > top) { top = counts[k]; leaders = [k]; }
+      else if (counts[k] === top) leaders.push(k);
+    });
+    return {
+      counts: counts,
+      top: top,
+      accused: leaders.length === 1 ? leaders[0] : "",
+      tie: leaders.length > 1
+    };
+  },
+
+  /* Points for one round, as a map of playerId -> delta.
+       impostor escapes .......... 3
+       voted correctly, caught ... 2
+       voted correctly, missed ... 1   (right read, wrong table)
+       caught impostor guesses ... 2 if the guess is right       */
+  score: function (roster, impostorIds, caughtId, guessRight) {
+    var caught = !!caughtId, out = {};
+    roster.forEach(function (p) {
+      var isImp = impostorIds.indexOf(p.id) !== -1;
+      var d = 0;
+      if (isImp) {
+        if (!caught || p.id !== caughtId) d = 3;
+        else if (guessRight) d = 2;
+      } else if (p.vote && impostorIds.indexOf(p.vote) !== -1) {
+        d = caught ? 2 : 1;
+      }
+      out[p.id] = d;
+    });
+    return out;
+  },
+
+  /* Hebrew and English both normalise to a bare comparable form:
+     niqqud, geresh, maqaf and case all stripped. */
+  normalise: function (s) {
+    return String(s || "")
+      .replace(/[֑-ׇ]/g, "")
+      .replace(/[׳״'"`’־–—-]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  },
+
+  /* Hebrew glues single-letter prefixes onto words — ה, ו, ב, ל, כ, מ, ש —
+     so "סדר" and "הסדר" are the same word for our purposes. Compare both
+     the written form and the form with that prefix removed. */
+  forms: function (w) {
+    var out = [w];
+    if (w.length >= 4 && "הובלכמש".indexOf(w.charAt(0)) !== -1) out.push(w.slice(1));
+    return out;
+  },
+
+  /* Same word, or an inflection of it. A different word that merely starts
+     the same way (קול / קולנוע, cat / catalogue) is fair play. */
+  tooClose: function (a, b) {
+    var fa = Rules.forms(a), fb = Rules.forms(b), i, j, x, y;
+    for (i = 0; i < fa.length; i++) for (j = 0; j < fb.length; j++) {
+      x = fa[i]; y = fb[j];
+      if (x === y) return true;
+      if (x.length >= 3 && Math.abs(x.length - y.length) <= 2 &&
+          (x.indexOf(y) === 0 || y.indexOf(x) === 0)) return true;
+    }
+    return false;
+  },
+
+  /* A clue must be one word, and for anyone holding the secret word it must
+     not be that word or a piece of it. The impostor is never checked — they
+     have nothing to give away. */
+  checkClue: function (raw, secret, isImpostor) {
+    var v = String(raw || "").trim();
+    if (!v) return { ok: false, quiet: true };
+    if (/\s/.test(v)) return { ok: false, key: "errOneWord" };
+    if (v.replace(/[\u0591-\u05C7]/g, "").length < 2) return { ok: false, key: "errTooShort" };
+    if (!isImpostor) {
+      var n = Rules.normalise(v);
+      var parts = Rules.normalise(secret).split(" ");
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i] && Rules.tooClose(parts[i], n)) return { ok: false, key: "errIsWord" };
+      }
+    }
+    return { ok: true, value: v.slice(0, 22) };
+  },
+
+  /* Two impostors need a crowd to hide in. */
+  maxImpostors: function (n) { return n >= 7 ? 2 : 1; },
+
+  code: function () {
+    var A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", s = "";
+    for (var i = 0; i < 4; i++) s += A[Math.floor(Math.random() * A.length)];
+    return s;
+  }
+};
+
+  root.SUSPECT_RULES = Rules;
+  if (typeof module === "object" && module.exports) module.exports = Rules;
+})(typeof window !== "undefined" ? window : globalThis);
