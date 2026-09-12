@@ -11,6 +11,7 @@
 (function () {
   "use strict";
 
+  var root = window;
   var DECK = window.SUSPECT_DECK;
   var I18N = window.SUSPECT_I18N;
 
@@ -18,57 +19,50 @@
      Prefs
      --------------------------------------------------------- */
   var Prefs = (function () {
-    var store = null;
-    try { localStorage.setItem("__s", "1"); localStorage.removeItem("__s"); store = localStorage; } catch (e) { store = null; }
-    function get(k, d) { try { var v = store && store.getItem("suspect." + k); return v == null ? d : v; } catch (e) { return d; } }
-    function set(k, v) { try { store && store.setItem("suspect." + k, v); } catch (e) {} }
-    var id = get("id", "");
-    if (!id) { id = "p" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); set("id", id); }
+    function safe(kind) {
+      try {
+        var s = window[kind];
+        s.setItem("__s", "1"); s.removeItem("__s");
+        return s;
+      } catch (e) { return null; }
+    }
+    var local = safe("localStorage"), tab = safe("sessionStorage");
+    function get(k, d) { try { var v = local && local.getItem("suspect." + k); return v == null ? d : v; } catch (e) { return d; } }
+    function set(k, v) { try { local && local.setItem("suspect." + k, v); } catch (e) {} }
+
+    /* Identity is per TAB, not per browser. Two windows of the same game are
+       two players — which is how one person tries the game out before the
+       table arrives — and a refresh still returns to the same seat. */
+    var id = null;
+    try { id = tab && tab.getItem("suspect.id"); } catch (e) {}
+    if (!id) {
+      id = "p" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+      try { tab && tab.setItem("suspect.id", id); } catch (e) {}
+    }
     return { get: get, set: set, id: id };
   })();
-
   var Rules = window.SUSPECT_RULES;
 
   /* ---------------------------------------------------------
-     Net
+     Store — the transport in use.
+     Two are available and they present the same small interface:
+       net-artifact.js  the Claude artifact database, when the page is
+                        running inside the artifact host
+       net-p2p.js       peer to peer, for the same game served from any
+                        ordinary web address with no account and no server
+     The page picks whichever one this environment can actually run.
      --------------------------------------------------------- */
-  var AWAY_MS = 34000;
-  var Net = {
-    db: null,
-    code: null,
-    subs: [],
-    beat: null,
+  var AWAY_MS = 90000;      /* how long a phone can be quiet before it reads as away */
+  var Store = null;
 
-    connect: function () {
-      if (!(window.claude && window.claude.use)) return Promise.resolve(null);
-      return window.claude.use("db").then(function (d) { Net.db = d; return d; }, function () { return null; });
-    },
-    room: function (code) { return Net.db.doc("rooms/" + (code || Net.code)); },
-    seats: function (code) { return Net.db.collection("rooms/" + (code || Net.code) + "/players"); },
-    seat: function (id) { return Net.seats().doc(id); },
-
-    stop: function () {
-      Net.subs.forEach(function (u) { try { u(); } catch (e) {} });
-      Net.subs = [];
-      if (Net.beat) { clearInterval(Net.beat); Net.beat = null; }
-    },
-
-    watch: function (code, onRoom, onSeats) {
-      Net.stop();
-      Net.code = code;
-      Net.subs.push(Net.room(code).onSnapshot(function (s) { onRoom(s.exists ? s.data() : null); }));
-      Net.subs.push(Net.seats(code).onSnapshot(function (q) {
-        onSeats(q.docs.map(function (d) {
-          var o = d.data() || {};
-          o.id = o.id || d.id;
-          return o;
-        }).sort(function (a, b) { return (a.joinedAt || 0) - (b.joinedAt || 0); }));
-      }));
-      Net.beat = setInterval(function () {
-        if (Net.db && Net.code) Net.seat(Prefs.id).update({ lastSeen: Date.now() })["catch"](function () {});
-      }, 9000);
-    }
-  };
+  function pickTransport() {
+    var artifact = root.SUSPECT_NET_ARTIFACT, p2p = root.SUSPECT_NET_P2P;
+    var tryOne = function (net) {
+      if (!net) return Promise.resolve(null);
+      return net.connect().then(function (ok) { return ok ? net : null; }, function () { return null; });
+    };
+    return tryOne(artifact).then(function (won) { return won || tryOne(p2p); });
+  }
 
   /* ---------------------------------------------------------
      App state
@@ -115,6 +109,16 @@
     if (!S.room) return false;
     var h = seatOf(S.room.hostId);
     return !h || away(h);
+  }
+  /* The person who opened the room owns it: they can always take the controls
+     back in one tap, and until they are plainly gone nobody else is offered
+     them. Peer-to-peer rooms live inside the opener's browser, so there the
+     role cannot move at all. */
+  function amOwner() { return !!S.room && S.room.ownerId === Prefs.id; }
+  function canClaim() {
+    if (!S.room || isHost() || !Store || !Store.takeover) return false;
+    if (amOwner()) return true;
+    return hostAway();
   }
   /* Everyone still holding the round up. At four players you can see who it
      is across the table; at twelve you cannot, so name them. */
@@ -177,16 +181,17 @@
   var Host = {
     lock: false,
 
-    open: function (name) {
-      var code = Rules.code();
-      return Net.room(code).set({
-        code: code, hostId: Prefs.id, createdAt: Date.now(),
+    /* The seed state for a new room. The transport picks the code, claims it,
+       and fills it in — a peer-to-peer room needs a code nobody else is on. */
+    seed: function () {
+      return {
+        code: "", hostId: Prefs.id, ownerId: Prefs.id, createdAt: Date.now(),
         phase: "lobby", round: 0, clueRound: 1, match: 1,
         catIdx: 0, wordIdx: 0, impostorIds: [], options: [], order: [],
         guess: -1, caught: false, caughtId: "", accusedId: "", tie: false,
         settings: { impostors: 1, clueRounds: 2, target: 12 },
         used: [], lastCat: -1, log: [], scoredRound: -1
-      }).then(function () { return code; });
+      };
     },
 
     startRound: function () {
@@ -201,9 +206,9 @@
       var chosen = ids.slice(0, count);
 
       Promise.all(S.seats.map(function (p) {
-        return Net.seat(p.id).update({ ready: false, clue: "", clue2: "", vote: "", delta: null, inRound: true });
+        return Store.updateSeat(p.id, { ready: false, clue: "", clue2: "", vote: "", delta: null, inRound: true });
       })).then(function () {
-        return Net.room().update({
+        return Store.updateRoom({
           phase: "reveal", round: (r.round || 0) + 1, clueRound: 1,
           catIdx: pick.cat, wordIdx: pick.word, lastCat: pick.cat, used: used,
           impostorIds: chosen,
@@ -214,23 +219,38 @@
       })["catch"](function () {});
     },
 
-    /* Called on every snapshot. Advances the round when the table is ready. */
+    /* Called on every snapshot. Advances the round when the table is ready.
+
+       Every branch runs through go(), which takes the work as a function so
+       the lock is set BEFORE anything is written. A transport that applies a
+       write synchronously — the peer-to-peer one does — otherwise re-enters
+       this machine from inside its own transition and settles the round twice. */
     tick: function () {
-      if (!S.room || !isHost() || !Net.db || Host.lock) return;
+      if (!S.room || !isHost() || !Store || Host.lock) return;
       var r = S.room, list = roster(), cfg = settings();
       if (!list.length) return;
       var all = function (fn) { return list.every(fn); };
-      var done = function () { Host.lock = false; };
-      var go = function (promise) { Host.lock = true; promise.then(done, done); };
+      var release = function () { Host.lock = false; };
+      var go = function (work) {
+        Host.lock = true;
+        var p;
+        try { p = work(); } catch (e) { release(); return; }
+        if (p && p.then) p.then(release, release); else release();
+      };
 
       if (r.phase === "reveal") {
-        if (all(function (p) { return p.ready; })) go(Net.room().update({ phase: "clues", clueRound: 1 }));
+        if (all(function (p) { return p.ready; })) {
+          go(function () { return Store.updateRoom({ phase: "clues", clueRound: 1 }); });
+        }
 
       } else if (r.phase === "clues") {
         var field = r.clueRound === 2 ? "clue2" : "clue";
         if (all(function (p) { return (p[field] || "").trim(); })) {
-          if (cfg.clueRounds === 2 && r.clueRound === 1) go(Net.room().update({ clueRound: 2 }));
-          else go(Net.room().update({ phase: "vote" }));
+          if (cfg.clueRounds === 2 && r.clueRound === 1) {
+            go(function () { return Store.updateRoom({ clueRound: 2 }); });
+          } else {
+            go(function () { return Store.updateRoom({ phase: "vote" }); });
+          }
         }
 
       } else if (r.phase === "vote") {
@@ -238,17 +258,22 @@
           var v = Rules.tally(list);
           var caughtId = v.accused && imps().indexOf(v.accused) !== -1 ? v.accused : "";
           if (caughtId) {
-            go(Net.room().update({ phase: "guess", caught: true, caughtId: caughtId, accusedId: v.accused, tie: v.tie }));
+            go(function () {
+              return Store.updateRoom({
+                phase: "guess", caught: true, caughtId: caughtId,
+                accusedId: v.accused, tie: v.tie
+              });
+            });
           } else {
             if (r.scoredRound === r.round) return;
-            go(Host.settle(list, "", false, { accusedId: v.accused, tie: v.tie }));
+            go(function () { return Host.settle(list, "", false, { accusedId: v.accused, tie: v.tie }); });
           }
         }
 
       } else if (r.phase === "guess") {
         if (r.guess !== -1) {
           if (r.scoredRound === r.round) return;
-          go(Host.settle(list, r.caughtId, r.guess === r.wordIdx, {}));
+          go(function () { return Host.settle(list, r.caughtId, r.guess === r.wordIdx, {}); });
         }
       }
     },
@@ -256,9 +281,11 @@
     /* Write the round's points, the log entry, and move to the verdict. */
     settle: function (list, caughtId, guessRight, extra) {
       var r = S.room;
+      if (r.scoredRound === r.round) return Promise.resolve();
+      r.scoredRound = r.round;          /* claim the round before writing a point */
       var deltas = Rules.score(list, imps(), caughtId, guessRight);
       var jobs = list.map(function (p) {
-        return Net.seat(p.id).update({ score: (p.score || 0) + (deltas[p.id] || 0), delta: deltas[p.id] || 0 });
+        return Store.updateSeat(p.id, { score: (p.score || 0) + (deltas[p.id] || 0), delta: deltas[p.id] || 0 });
       });
       var entry = {
         r: r.round,
@@ -274,7 +301,7 @@
         };
         if (extra.accusedId !== undefined) patch.accusedId = extra.accusedId;
         if (extra.tie !== undefined) patch.tie = extra.tie;
-        return Net.room().update(patch);
+        return Store.updateRoom(patch);
       });
     },
 
@@ -283,16 +310,16 @@
       if (!isHost() || !S.room) return;
       var r = S.room, list = roster(), jobs = [];
       if (r.phase === "reveal") {
-        list.forEach(function (p) { if (!p.ready) jobs.push(Net.seat(p.id).update({ ready: true })); });
+        list.forEach(function (p) { if (!p.ready) jobs.push(Store.updateSeat(p.id, { ready: true })); });
       } else if (r.phase === "clues") {
         var f = r.clueRound === 2 ? "clue2" : "clue";
         list.forEach(function (p) {
-          if (!(p[f] || "").trim()) { var u = {}; u[f] = "—"; jobs.push(Net.seat(p.id).update(u)); }
+          if (!(p[f] || "").trim()) { var u = {}; u[f] = "—"; jobs.push(Store.updateSeat(p.id, u)); }
         });
       } else if (r.phase === "vote") {
-        list.forEach(function (p) { if (!p.vote) jobs.push(Net.seat(p.id).update({ vote: "skip" })); });
+        list.forEach(function (p) { if (!p.vote) jobs.push(Store.updateSeat(p.id, { vote: "skip" })); });
       } else if (r.phase === "guess") {
-        jobs.push(Net.room().update({ guess: -2 }));
+        jobs.push(Store.updateRoom({ guess: -2 }));
       }
       Promise.all(jobs)["catch"](function () {});
     },
@@ -306,28 +333,28 @@
          snapshot — without this the newer tap would overwrite the older. */
       if (S.room) S.room.settings = s;
       App.paint();
-      Net.room().update({ settings: s })["catch"](function () {});
+      Store.updateRoom({ settings: s })["catch"](function () {});
     },
 
-    toChampion: function () { Net.room().update({ phase: "champion" })["catch"](function () {}); },
+    toChampion: function () { Store.updateRoom({ phase: "champion" })["catch"](function () {}); },
 
     newMatch: function () {
       if (!isHost()) return;
       Promise.all(S.seats.map(function (p) {
-        return Net.seat(p.id).update({ score: 0, delta: null, ready: false, clue: "", clue2: "", vote: "", inRound: false });
+        return Store.updateSeat(p.id, { score: 0, delta: null, ready: false, clue: "", clue2: "", vote: "", inRound: false });
       })).then(function () {
-        return Net.room().update({
+        return Store.updateRoom({
           phase: "lobby", round: 0, log: [], used: [], lastCat: -1,
           scoredRound: -1, match: (S.room.match || 1) + 1
         });
       })["catch"](function () {});
     },
 
-    backToLobby: function () { Net.room().update({ phase: "lobby" })["catch"](function () {}); },
+    backToLobby: function () { Store.updateRoom({ phase: "lobby" })["catch"](function () {}); },
 
-    claim: function () { Net.room().update({ hostId: Prefs.id })["catch"](function () {}); },
+    claim: function () { Store.updateRoom({ hostId: Prefs.id })["catch"](function () {}); },
 
-    remove: function (id) { if (isHost() && id !== Prefs.id) Net.seat(id)["delete"]()["catch"](function () {}); }
+    remove: function (id) { if (isHost() && id !== Prefs.id) Store.removeSeat(id)["catch"](function () {}); }
   };
 
   /* ---------------------------------------------------------
@@ -354,38 +381,38 @@
     },
 
     create: function () {
-      if (!Net.db) return App.fail("errNet");
+      if (!Store) return App.fail("errNet");
       if (!S.name.trim()) return App.fail("errName");
-      S.busy = true; App.paint();
-      Host.open(S.name).then(function (code) {
-        return Net.seats(code).doc(Prefs.id).set(Play.seatData(null)).then(function () { return code; });
-      }).then(function (code) {
+      S.busy = true; S.error = ""; App.paint(true);
+      Store.open(Host.seed(), Play.seatData(null)).then(function (code) {
         App.entered(code);
-      })["catch"](function () { S.busy = false; App.fail("errCode"); });
+      })["catch"](function (e) {
+        S.busy = false;
+        App.fail(e && e.message === "broker" ? "errBroker" : "errCode");
+      });
     },
 
     join: function (code) {
-      if (!Net.db) return App.fail("errNet");
+      if (!Store) return App.fail("errNet");
       code = String(code || "").trim().toUpperCase();
       if (!S.name.trim()) return App.fail("errName");
       if (code.length !== 4) return App.fail("errCode");
-      S.busy = true; S.error = ""; App.paint();
-      Net.room(code).get().then(function (snap) {
-        if (!snap.exists) throw new Error("no room");
-        return Net.seats(code).doc(Prefs.id).get().then(function (mine) {
-          return Net.seats(code).doc(Prefs.id).set(Play.seatData(mine.exists ? mine.data() : null));
-        });
-      }).then(function () {
+      S.busy = true; S.error = ""; App.paint(true);
+      Store.join(code, Play.seatData(null)).then(function () {
         App.entered(code);
-      })["catch"](function () { S.busy = false; App.fail("errCode"); });
+      })["catch"](function (e) {
+        S.busy = false;
+        var why = e && e.message;
+        App.fail(why === "broker" ? "errBroker" : (why === "timeout" ? "errSlow" : "errCode"));
+      });
     },
 
     leave: function () {
-      if (Net.db && Net.code) Net.seat(Prefs.id)["delete"]()["catch"](function () {});
+      if (Store) Store.leave(Prefs.id);
       App.exit();
     },
 
-    ready: function () { Net.seat(Prefs.id).update({ ready: true })["catch"](function () {}); },
+    ready: function () { Store.updateSeat(Prefs.id, { ready: true })["catch"](function () {}); },
 
     sendClue: function () {
       /* Both languages are live at one table, so the word is off-limits in
@@ -401,16 +428,16 @@
       var patch = {};
       patch[S.room.clueRound === 2 ? "clue2" : "clue"] = check.value;
       S.clueDraft = ""; S.clueError = "";
-      Net.seat(Prefs.id).update(patch)["catch"](function () {});
+      Store.updateSeat(Prefs.id, patch)["catch"](function () {});
     },
 
     vote: function (id) {
       var m = me();
       if (!m || m.vote || id === Prefs.id) return;
-      Net.seat(Prefs.id).update({ vote: id })["catch"](function () {});
+      Store.updateSeat(Prefs.id, { vote: id })["catch"](function () {});
     },
 
-    guess: function (i) { Net.room().update({ guess: i })["catch"](function () {}); }
+    guess: function (i) { Store.updateRoom({ guess: i })["catch"](function () {}); }
   };
 
   /* ---------------------------------------------------------
@@ -508,8 +535,9 @@
 
     hostTools: function () {
       var L = T(), out = [];
-      if (hostAway() && !isHost()) {
-        out.push('<button class="btn btn--ghost btn--sm" type="button" id="btnClaim">' + esc(L.takeover) + '</button>');
+      if (canClaim()) {
+        out.push('<button class="btn btn--ghost btn--sm" type="button" id="btnClaim">' +
+                 esc(amOwner() ? L.reclaim : L.takeover) + '</button>');
       }
       if (isHost() && ["reveal", "clues", "vote", "guess"].indexOf(S.room.phase) !== -1) {
         out.push('<button class="btn btn--quiet btn--sm" type="button" id="btnSkip">' + esc(L.skipWaiting) + '</button>');
@@ -533,6 +561,8 @@
         '</div>',
         '<p class="note">', esc(L.shareHint), '</p>',
         '<button class="btn btn--ghost btn--sm" type="button" id="btnCopy">', esc(S.copied ? L.copied : L.copyLink), '</button>',
+        (Store && Store.kind === "p2p" && amOwner())
+          ? '<p class="note note--warn">' + esc(L.hostMustStay) + '</p>' : '',
         '</section>',
 
         '<section class="panel enter">',
@@ -849,20 +879,33 @@
     entered: function (code) {
       S.view = "room"; S.error = ""; S.busy = false; S.seatedOnce = false;
       try { history.replaceState(null, "", "#" + code); } catch (e) { location.hash = code; }
-      Net.watch(code, function (room) {
+
+      Store.onChange(function (room, seats) {
         S.room = room;
-        App.paint(); Host.tick();
-      }, function (seats) {
-        S.seats = seats;
+        S.seats = seats || [];
         if (seatOf(Prefs.id)) S.seatedOnce = true;
         else if (S.seatedOnce) { App.exit(); return; }   /* removed by the host */
-        App.paint(); Host.tick();
+        App.paint();
+        Host.tick();
       });
+      Store.onFatal(function (key) {
+        App.exit();
+        S.error = t(key);
+        App.paint(true);
+      });
+
+      /* presence: tell the room this phone is still awake */
+      if (App.beat) clearInterval(App.beat);
+      App.beat = setInterval(function () {
+        if (Store && Store.code) Store.updateSeat(Prefs.id, { lastSeen: Date.now() });
+      }, 9000);
+
       App.paint(true);
     },
 
     exit: function () {
-      Net.stop();
+      if (App.beat) { clearInterval(App.beat); App.beat = null; }
+      if (Store) { Store.onChange(null); Store.onFatal(null); }
       S.view = "home"; S.room = null; S.seats = []; S.seatedOnce = false;
       S.clueDraft = ""; S.clueError = "";
       try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
@@ -917,7 +960,7 @@
       }
 
       $("footL").textContent = S.room && S.room.round ? L.round + " " + S.room.round : L.brand + " · " + L.brandAlt;
-      $("footR").innerHTML = Net.code ? '<b>' + esc(Net.code) + '</b>' : "";
+      $("footR").innerHTML = Store && Store.code ? '<b>' + esc(Store.code) + '</b>' : "";
       $("live").textContent = S.room ? (L[{ lobby: "lobby", reveal: "stepReveal", clues: "stepClue", vote: "stepVote", guess: "verdict", results: "verdict", champion: "champion" }[S.room.phase]] || "") : "";
     },
 
@@ -1026,8 +1069,9 @@
       S.joinCode = (location.hash || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 4);
       App.paint(true);
 
-      Net.connect().then(function (db) {
-        if (!db) { S.error = t("errNet"); App.paint(true); return; }
+      pickTransport().then(function (net) {
+        Store = net;
+        if (!Store) { S.error = t("errNet"); }
         App.paint(true);
       });
 

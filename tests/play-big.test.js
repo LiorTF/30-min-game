@@ -32,6 +32,20 @@ let pass = 0, fail = 0;
 const ok = (n, c, d) => { if (c) { pass++; console.log("  [ok] " + n); } else { fail++; console.log("  [XX] " + n + (d ? "  -> " + d : "")); } };
 const step = n => console.log("\n" + n);
 const wait = ms => new Promise(r => setTimeout(r, ms));
+/* Send a clue and wait for the room to have actually recorded it. Watching the
+   input disappear is not enough: for the last player of a round it is replaced
+   by the next round's input rather than removed. */
+const sendClue = async (page, word, id, field) => {
+  await page.fill("#clueIn", word);
+  await page.click("#btnClue");
+  for (let t = 0; t < 100; t++) {
+    const seat = seatsOf().find(s => s.id === id);
+    if (seat && String(seat[field] || "").trim()) return;
+    await wait(100);
+  }
+  throw new Error("clue from " + id + " never registered");
+};
+
 
 (async () => {
   fs.mkdirSync(SHOTS, { recursive: true });
@@ -84,7 +98,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   ok("two impostors are dealt", room().impostorIds.length === 2, JSON.stringify(room().impostorIds));
 
   const ids = [];
-  for (const p of pages) ids.push(await p.evaluate(() => localStorage.getItem("suspect.id")));
+  for (const p of pages) ids.push(await p.evaluate(() => sessionStorage.getItem("suspect.id")));
   const impIdx = room().impostorIds.map(id => ids.indexOf(id));
   ok("the two impostors are different people", impIdx[0] !== impIdx[1]);
   const impPage = pages[impIdx[0]];
@@ -102,7 +116,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 
   step("one clue round only");
   const words = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"];
-  for (let i = 0; i < N; i++) { await pages[i].fill("#clueIn", words[i]); await pages[i].click("#btnClue"); await wait(120); }
+  for (let i = 0; i < N; i++) { await sendClue(pages[i], words[i], ids[i], "clue"); }
   await wait(900);
   ok("one clue round goes straight to the vote", room().phase === "vote", room().phase + "/" + room().clueRound);
   ok("no second clue column is shown", (await host.$$(".clues__w--second")).length === 0);

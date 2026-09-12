@@ -33,6 +33,20 @@ let pass = 0, fail = 0;
 const ok = (n, c, d) => { if (c) { pass++; console.log("  [ok] " + n); } else { fail++; console.log("  [XX] " + n + (d ? "  -> " + d : "")); } };
 const step = n => console.log("\n" + n);
 const wait = ms => new Promise(r => setTimeout(r, ms));
+/* Send a clue and wait for the room to have actually recorded it. Watching the
+   input disappear is not enough: for the last player of a round it is replaced
+   by the next round's input rather than removed. */
+const sendClue = async (page, word, id, field) => {
+  await page.fill("#clueIn", word);
+  await page.click("#btnClue");
+  for (let t = 0; t < 100; t++) {
+    const seat = seatsOf().find(s => s.id === id);
+    if (seat && String(seat[field] || "").trim()) return;
+    await wait(100);
+  }
+  throw new Error("clue from " + id + " never registered");
+};
+
 
 const NAMES = ["Dana", "Yoav", "Michal", "Avi", "Noa", "Tal", "Ronit", "Eitan",
                "Shira", "Omer", "Gali", "Itai"];
@@ -88,7 +102,7 @@ const NAMES = ["Dana", "Yoav", "Michal", "Avi", "Noa", "Tal", "Ronit", "Eitan",
   ok("they are three different people", new Set(room().impostorIds).size === 3);
 
   const ids = [];
-  for (const p of pages) ids.push(await p.evaluate(() => localStorage.getItem("suspect.id")));
+  for (const p of pages) ids.push(await p.evaluate(() => sessionStorage.getItem("suspect.id")));
   const impIdx = room().impostorIds.map(id => ids.indexOf(id));
   const innocentIdx = ids.map((_, i) => i).filter(i => impIdx.indexOf(i) === -1);
   ok("nine innocents and three impostors", innocentIdx.length === 9);
@@ -112,7 +126,7 @@ const NAMES = ["Dana", "Yoav", "Michal", "Avi", "Noa", "Tal", "Ronit", "Eitan",
   step("twelve clues");
   const words = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta",
                  "eta", "theta", "iota", "kappa", "lambda", "sigma"];
-  for (let i = 0; i < N; i++) { await pages[i].fill("#clueIn", words[i]); await pages[i].click("#btnClue"); await wait(70); }
+  for (let i = 0; i < N; i++) { await sendClue(pages[i], words[i], ids[i], "clue"); }
   await wait(1200);
   ok("the table reaches the vote", room().phase === "vote", room().phase);
   ok("all twelve clues are on the table", (await host.$$(".clues li")).length === N);

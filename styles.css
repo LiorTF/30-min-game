@@ -105,6 +105,10 @@ p{margin:0}
 .kicker--quiet::after{background:linear-gradient(to var(--kdir,right),var(--line),transparent)}
 .lede{color:var(--bone-2);max-width:54ch}
 .note{color:var(--ash);font-size:var(--t-sm);line-height:1.5}
+.note--warn{
+  color:var(--bone-2);border-inline-start:2px solid var(--line-red);
+  padding-inline-start:var(--s3);
+}
 .muted{color:var(--ash)}
 .tnum{font-variant-numeric:tabular-nums}
 .serif{font-family:var(--serif);font-weight:800}

@@ -33,6 +33,20 @@ let pass = 0, fail = 0;
 const ok = (n, c, d) => { if (c) { pass++; console.log("  [ok] " + n); } else { fail++; console.log("  [XX] " + n + (d ? "  -> " + d : "")); } };
 const step = n => console.log("\n" + n);
 const wait = ms => new Promise(r => setTimeout(r, ms));
+/* Send a clue and wait for the room to have actually recorded it. Watching the
+   input disappear is not enough: for the last player of a round it is replaced
+   by the next round's input rather than removed. */
+const sendClue = async (page, word, id, field) => {
+  await page.fill("#clueIn", word);
+  await page.click("#btnClue");
+  for (let t = 0; t < 100; t++) {
+    const seat = seatsOf().find(s => s.id === id);
+    if (seat && String(seat[field] || "").trim()) return;
+    await wait(100);
+  }
+  throw new Error("clue from " + id + " never registered");
+};
+
 
 (async () => {
   fs.mkdirSync(SHOTS, { recursive: true });
@@ -42,7 +56,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   const names = ["Dana", "Yoav", "Michal", "Avi"];
 
   for (let i = 0; i < 4; i++) {
-    /* a context each, so every player gets their own localStorage identity */
+    /* a context each; identity is per tab, so each page is its own player */
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
     const page = await ctx.newPage();
     await page.exposeFunction("__db", db);
@@ -130,7 +144,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   /* ---------- clues, both rounds ---------- */
   step("clues");
   const seatIds = [];
-  for (const pg of players) seatIds.push(await pg.evaluate(() => localStorage.getItem("suspect.id")));
+  for (const pg of players) seatIds.push(await pg.evaluate(() => sessionStorage.getItem("suspect.id")));
   const impIdx = seatIds.indexOf(room().impostorIds[0]);
   ok("the impostor is hidden from their own word screen",
      (await players[impIdx].textContent(".strip__word")).indexOf("·") !== -1);
@@ -146,7 +160,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   await innocent.fill("#clueIn", "");
 
   const words1 = ["alpha", "beta", "gamma", "delta"];
-  for (let i = 0; i < 4; i++) { await players[i].fill("#clueIn", words1[i]); await players[i].click("#btnClue"); await wait(160); }
+  for (let i = 0; i < 4; i++) { await sendClue(players[i], words1[i], seatIds[i], "clue"); }
   await wait(800);
   ok("a second clue round opens", room().clueRound === 2 && room().phase === "clues",
      room().phase + "/" + room().clueRound);
@@ -155,7 +169,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   await host.screenshot({ path: SHOTS + "/3-clues.png", fullPage: true });
 
   const words2 = ["zeta", "eta", "iota", "kappa"];
-  for (let i = 0; i < 4; i++) { await players[i].fill("#clueIn", words2[i]); await players[i].click("#btnClue"); await wait(160); }
+  for (let i = 0; i < 4; i++) { await sendClue(players[i], words2[i], seatIds[i], "clue2"); }
   await wait(800);
   ok("the table moves to the vote", room().phase === "vote", room().phase);
 
@@ -228,17 +242,40 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   ok("clues and votes are cleared", seatsOf().every(v => !v.clue && !v.clue2 && !v.vote));
   ok("scores carry across rounds", seatsOf().every(v => v.score === 2));
 
-  /* ---------- host walks away ---------- */
+  /* ---------- the host walks away, and comes back ---------- */
   step("host takeover");
-  await host.evaluate(() => { window.__frozen = true; });
   const hostSeatKey = [...store.keys()].find(k => k.endsWith("/players/" + seatIds[0]));
-  store.set(hostSeatKey, Object.assign({}, store.get(hostSeatKey), { lastSeen: Date.now() - 60000 }));
+  const quiet = ms => store.set(hostSeatKey, Object.assign({}, store.get(hostSeatKey), { lastSeen: Date.now() - ms }));
+
+  quiet(45000);
   await wait(1200);
-  ok("another player is offered the host role when the host goes quiet",
-     await p1.$("#btnClaim") !== null);
+  ok("a briefly quiet host is not up for grabs", await p1.$("#btnClaim") === null);
+
+  /* the host's own phone reports in every few seconds, so keep the clock
+     pushed back until the other players notice the silence */
+  let offered = null;
+  for (let t = 0; t < 25 && !offered; t++) {
+    quiet(150000);
+    await wait(400);
+    offered = await p1.$("#btnClaim");
+  }
+  ok("a host who has really gone can be replaced", offered !== null);
   await p1.click("#btnClaim");
-  await wait(600);
+  await wait(700);
   ok("the new host takes over", room().hostId === seatIds[1], room().hostId);
+
+  /* the player who opened the room can always take the controls back */
+  await wait(400);
+  ok("the opener is offered their controls back", await host.$("#btnClaim") !== null);
+  ok("and the button says so rather than offering a takeover",
+     (await host.textContent("#btnClaim")).trim().length > 0);
+  await host.click("#btnClaim");
+  await wait(700);
+  ok("the opener has the room back", room().hostId === seatIds[0], room().hostId);
+  /* once the opener's phone reports in again, nobody is offered the room */
+  store.set(hostSeatKey, Object.assign({}, store.get(hostSeatKey), { lastSeen: Date.now() }));
+  await wait(1200);
+  ok("nobody else is offered it while the opener is answering", await p2.$("#btnClaim") === null);
 
   /* ---------- layout ---------- */
   step("layout");

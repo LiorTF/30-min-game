@@ -153,6 +153,23 @@ var Rules = {
   /* The table size at which each impostor count unlocks, for the lobby note. */
   impostorsUnlockAt: function (count) { return count >= 3 ? 10 : (count >= 2 ? 7 : 0); },
 
+  /* Coming back to a room you were already in — a refresh, a dropped phone,
+     a second tab — keeps your standing. Only the name can change. */
+  rejoin: function (prev, fresh) {
+    if (!prev) return fresh;
+    var out = {}, k;
+    for (k in fresh) if (Object.prototype.hasOwnProperty.call(fresh, k)) out[k] = fresh[k];
+    out.score = prev.score || 0;
+    out.joinedAt = prev.joinedAt || fresh.joinedAt;
+    out.inRound = !!prev.inRound;
+    out.ready = !!prev.ready;
+    out.clue = prev.clue || "";
+    out.clue2 = prev.clue2 || "";
+    out.vote = prev.vote || "";
+    out.delta = prev.delta == null ? null : prev.delta;
+    return out;
+  },
+
   code: function () {
     var A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", s = "";
     for (var i = 0; i < 4; i++) s += A[Math.floor(Math.random() * A.length)];

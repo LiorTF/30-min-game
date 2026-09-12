@@ -172,5 +172,19 @@ ok("shuffle keeps every element", (() => {
   return b.length === 8 && a.every(x => b.includes(x));
 })());
 
+group("rejoining");
+{
+  const fresh = { id: "p1", name: "Dana B", score: 0, joinedAt: 999, inRound: false, ready: false, clue: "", clue2: "", vote: "", delta: null };
+  const prev = { id: "p1", name: "Dana", score: 7, joinedAt: 100, inRound: true, ready: true, clue: "alpha", clue2: "beta", vote: "p2", delta: 2 };
+  const back = R.rejoin(prev, fresh);
+  eq("a returning player keeps their score", back.score, 7);
+  eq("and their seat in the join order", back.joinedAt, 100);
+  eq("and their place in the running round", back.inRound, true);
+  eq("and the clues they already sent", back.clue, "alpha");
+  eq("and the vote they already cast", back.vote, "p2");
+  eq("but takes the name they just typed", back.name, "Dana B");
+}
+eq("a brand new player is left alone", R.rejoin(null, { id: "x", score: 0 }).score, 0);
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
