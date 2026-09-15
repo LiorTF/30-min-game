@@ -458,12 +458,14 @@
         '<input class="input" type="text" id="nameIn" maxlength="18" autocomplete="nickname" ',
         'placeholder="', esc(L.namePh), '" value="', esc(S.name), '"></label>',
         S.error ? '<p class="err">' + esc(S.error) + '</p>' : '',
-        '<button class="btn" type="button" id="btnCreate"', S.busy ? ' disabled' : '', '>', esc(L.create), '</button>',
+        '<button class="btn" type="button" id="btnCreate"', S.busy ? ' disabled' : '', '>',
+        esc(S.busy ? L.connecting : L.create), '</button>',
         '<div class="between"><hr class="rule" style="flex:1"><span class="status">', esc(L.or), '</span><hr class="rule" style="flex:1"></div>',
         '<label class="field" for="codeIn"><span class="field__label">', esc(L.codeLabel), '</span>',
         '<input class="input input--code" type="text" id="codeIn" maxlength="4" autocomplete="off" ',
         'autocapitalize="characters" spellcheck="false" placeholder="····" value="', esc(S.joinCode), '"></label>',
-        '<button class="btn btn--ghost" type="button" id="btnJoin"', S.busy ? ' disabled' : '', '>', esc(L.join), '</button>',
+        '<button class="btn btn--ghost" type="button" id="btnJoin"', S.busy ? ' disabled' : '', '>',
+        esc(S.busy ? L.connecting : L.join), '</button>',
         '</section>',
 
         View.rules()

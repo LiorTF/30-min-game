@@ -69,9 +69,14 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 
   step("opening a room");
   await host.fill("#nameIn", names[0]);
+  const openedAt = Date.now();
   await host.click("#btnCreate");
   await host.waitForSelector(".code", { timeout: 20000 });
+  const openMs = Date.now() - openedAt;
   const code = (await host.textContent(".code")).trim();
+  /* the room's first state is emitted before the game subscribes; if it is
+     dropped the lobby waits ~9s for the next broadcast */
+  ok("the lobby appears as soon as the room opens", openMs < 8000, openMs + "ms");
   ok("the host claimed a room code from the broker", /^[A-Z0-9]{4}$/.test(code), code);
   ok("the opener is warned to keep the page open", await host.$(".note--warn") !== null);
   ok("the host role cannot be handed on in a peer room", await host.$("#btnClaim") === null);
@@ -85,6 +90,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   }
   await wait(900);
   ok("all four are seated on the host's screen", (await host.$$(".roster li")).length === 4);
+  ok("a guest lands straight in the lobby", await p3.$(".code") !== null);
   ok("and on a guest's screen", (await p2.$$(".roster li")).length === 4);
   ok("the guest sees the same room code", (await p2.textContent(".foot")).indexOf(code) !== -1);
   await host.screenshot({ path: SHOTS + "/p1-lobby.png", fullPage: true });

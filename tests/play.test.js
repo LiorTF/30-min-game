@@ -78,10 +78,14 @@ const sendClue = async (page, word, id, field) => {
   /* ---------- open and fill the room ---------- */
   step("lobby");
   await host.fill("#nameIn", names[0]);
+  const openedAt = Date.now();
   await host.click("#btnCreate");
   await host.waitForSelector(".code", { timeout: 8000 });
+  const openMs = Date.now() - openedAt;
   const code = (await host.textContent(".code")).trim();
   ok("host opened a room with a 4-character code", /^[A-Z0-9]{4}$/.test(code), code);
+  /* the lobby used to wait for the next presence heartbeat before it drew */
+  ok("the lobby appears at once, not on the next heartbeat", openMs < 4000, openMs + "ms");
 
   for (let i = 0; i < guests.length; i++) {
     await guests[i].fill("#nameIn", names[i + 1]);

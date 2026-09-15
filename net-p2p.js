@@ -60,7 +60,15 @@
     _me: null,
 
     connect: function () { return Promise.resolve(!!root.Peer); },
-    onChange: function (fn) { this._cb = fn; },
+
+    /* Whoever subscribes gets the room as it stands right now. Without this
+       the first state — the one produced by opening the room — is emitted
+       before the game has subscribed and is simply lost, and nothing renders
+       until the next broadcast happens to come along. */
+    onChange: function (fn) {
+      this._cb = fn;
+      if (fn && this.state.room) this._emit();
+    },
     onFatal: function (fn) { this._fatal = fn; },
 
     _seatList: function () {

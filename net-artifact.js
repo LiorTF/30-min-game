@@ -38,7 +38,12 @@
       );
     },
 
-    onChange: function (fn) { this._cb = fn; },
+    /* Deliver what we already hold the moment someone subscribes: a snapshot
+       that arrived before the game was listening must not be lost. */
+    onChange: function (fn) {
+      this._cb = fn;
+      if (fn && (this._room || this._seats.length)) this._emit();
+    },
     onFatal: function (fn) { this._fatal = fn; },
 
     _doc: function (code) { return this.db.doc("rooms/" + (code || this.code)); },
