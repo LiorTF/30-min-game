@@ -455,3 +455,136 @@ p{margin:0}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
   .flip{transition:none}
 }
+
+/* ============================================================
+   Roles, the record, and the theatre around them
+   ============================================================ */
+
+/* ---- the role card ---- */
+.rolechip{
+  font:700 10px/1 var(--sans);letter-spacing:.26em;text-transform:uppercase;color:var(--red-lit);
+  border:1px solid var(--line-red);border-radius:2px;padding:6px 10px;
+}
+.flip__front.role-jester{border-color:#C9A227;box-shadow:inset 0 0 88px rgba(201,162,39,.20)}
+.flip__front.role-jester .rolechip{color:#E3B93C;border-color:rgba(201,162,39,.45)}
+.flip__front.role-accomplice .rolechip,
+.flip__front.role-witness .rolechip{color:var(--bone-2);border-color:var(--line-2)}
+
+/* ---- the last trial ---- */
+.trial{
+  display:flex;flex-direction:column;gap:4px;align-items:center;text-align:center;
+  border:1px solid var(--red);border-radius:3px;padding:var(--s3) var(--s4);
+  background:linear-gradient(178deg,rgba(206,18,41,.24),rgba(206,18,41,.06));
+  box-shadow:0 0 46px -14px rgba(206,18,41,.8);
+}
+.trial__name{font:700 12px/1 var(--sans);letter-spacing:.3em;text-transform:uppercase;color:var(--bone)}
+.trial__note{font-size:var(--t-sm);color:var(--bone-2)}
+.btn--trial{background:linear-gradient(100deg,var(--red),#8E0C1D);box-shadow:0 0 40px -12px rgba(206,18,41,.9)}
+.tag--double{color:var(--red-lit);border-color:var(--line-red)}
+
+/* ---- the verdict ---- */
+.badge--jester{background:rgba(201,162,39,.14);color:#E3B93C;border-color:rgba(201,162,39,.4)}
+.verdict.is-fresh .stamp{animation:stamp .55s cubic-bezier(.2,1.5,.32,1) both}
+.verdict.is-fresh .verdict__name{animation:enter .45s .16s var(--ease) both}
+.verdict.is-fresh .verdict__word{animation:enter .45s .28s var(--ease) both}
+@keyframes stamp{
+  0%{opacity:0;transform:scale(2.6) rotate(-10deg)}
+  55%{opacity:1;transform:scale(.93) rotate(1.5deg)}
+  100%{opacity:1;transform:none}
+}
+
+/* the one line the table repeats back to each other */
+.story{
+  text-align:center;font-size:var(--t-md);line-height:1.5;color:var(--bone);
+  border-block:1px solid var(--line-red);padding-block:var(--s4);margin:0;
+  text-wrap:balance;
+}
+.story.is-fresh{animation:enter .5s .42s var(--ease) both}
+
+/* ---- who was who ---- */
+.ledger{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.ledger__row{
+  display:flex;align-items:center;gap:var(--s3);padding-block:10px;
+  border-block-start:1px solid var(--line);
+}
+.ledger__row:first-child{border-block-start:0}
+.ledger__name{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere}
+.ledger__word{
+  font-family:var(--display);font-weight:700;font-size:var(--t-sm);color:var(--bone-2);
+  overflow-wrap:anywhere;
+}
+.ledger__role{
+  flex:none;font:700 9px/1 var(--sans);letter-spacing:.2em;text-transform:uppercase;
+  border:1px solid var(--line);border-radius:2px;padding:5px 7px;color:var(--ash);
+}
+.ledger__row.role-impostor .ledger__role{color:var(--red-lit);border-color:var(--line-red)}
+.ledger__row.role-jester .ledger__role{color:#E3B93C;border-color:rgba(201,162,39,.4)}
+.ledger__row.role-confused .ledger__role{color:var(--good);border-color:var(--good-dim)}
+
+/* ---- clue entrance ---- */
+.clues--fresh li{animation:clueIn .42s var(--ease) both}
+@keyframes clueIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* ---- word packs ---- */
+.packs{display:flex;flex-wrap:wrap;gap:7px}
+.pack{
+  appearance:none;cursor:pointer;background:none;color:var(--ash);
+  border:1px solid var(--line);border-radius:2px;padding:9px 12px;
+  font:600 var(--t-sm)/1 var(--sans);transition:color .18s var(--ease),border-color .18s var(--ease),background .18s var(--ease);
+}
+.pack:hover:not(:disabled){color:var(--bone)}
+.pack.is-on{color:var(--bone);border-color:var(--line-red);background:rgba(206,18,41,.14)}
+.pack:disabled{opacity:.45;cursor:not-allowed}
+.chip--on{color:var(--bone);border-color:var(--line-red)}
+
+/* ---- titles ---- */
+.titles{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,1fr);gap:var(--s2)}
+@media (max-width:420px){.titles{grid-template-columns:1fr}}
+.title-card{
+  border:1px solid var(--line);border-radius:3px;padding:var(--s3) var(--s4);
+  display:flex;flex-direction:column;gap:3px;background:linear-gradient(178deg,var(--ink-2),var(--ink-1));
+  animation:titleIn .5s var(--ease) both;
+}
+@keyframes titleIn{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+.title-card__name{font:700 10px/1 var(--sans);letter-spacing:.28em;text-transform:uppercase;color:var(--red)}
+.title-card__holder{font-family:var(--display);font-weight:700;font-size:20px;overflow-wrap:anywhere}
+.title-card__note{font-size:var(--t-xs);color:var(--ash)}
+
+/* ---- the all-time book ---- */
+.book{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.book__row{
+  display:flex;align-items:center;gap:var(--s3);padding-block:11px;
+  border-block-start:1px solid var(--line);
+}
+.book__row:first-child{border-block-start:0}
+.book__main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.book__name{font-weight:600;font-size:var(--t-md);overflow-wrap:anywhere}
+.book__meta{
+  font:400 var(--t-xs)/1.4 var(--sans);color:var(--ash);
+  font-variant-numeric:tabular-nums;overflow-wrap:anywhere;
+}
+.book__bluff{
+  font-family:var(--display);font-size:var(--t-sm);color:var(--bone-2);overflow-wrap:anywhere;
+}
+.book__bluff .muted{
+  font-family:var(--sans);font-size:9px;letter-spacing:.2em;text-transform:uppercase;
+  margin-inline-end:6px;
+}
+
+/* ---- the crown draws itself ---- */
+.crown.is-fresh .crown__ring{animation:ringIn .7s cubic-bezier(.2,1.3,.3,1) both}
+.crown.is-fresh .crown__name{animation:enter .6s .2s var(--ease) both}
+.crown.is-fresh .crown__score{animation:enter .6s .36s var(--ease) both}
+@keyframes ringIn{from{opacity:0;transform:scale(.4) rotate(-40deg)}to{opacity:1;transform:none}}
+
+/* a point actually landing should be visible */
+.delta{animation:deltaPop .45s cubic-bezier(.2,1.5,.3,1) both}
+@keyframes deltaPop{0%{opacity:0;transform:scale(.5)}70%{transform:scale(1.14)}100%{opacity:1;transform:none}}
+
+.rules__roles{
+  list-style:none;margin:var(--s3) 0 0;padding:0;
+  display:flex;flex-direction:column;gap:9px;
+  font-size:var(--t-sm);line-height:1.5;color:var(--ash);
+}
+.rules__roles li{padding-inline-start:var(--s3);border-inline-start:1px solid var(--line-red)}
+.rules__roles b{color:var(--bone);font-weight:600}

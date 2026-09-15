@@ -86,6 +86,10 @@ const NAMES = ["Dana", "Yoav", "Michal", "Avi", "Noa", "Tal", "Ronit", "Eitan",
      !(await host.$eval('[data-set="impostors"][data-val="3"]', el => el.disabled)));
 
   step("three impostors");
+  /* these suites cover the base game; roles have a suite of their own */
+  await host.click('[data-setstr="roleMode"][data-val="off"]');
+  await wait(300);
+
   await host.click('[data-set="impostors"][data-val="3"]');
   await wait(400);
   await host.click('[data-set="clueRounds"][data-val="1"]');

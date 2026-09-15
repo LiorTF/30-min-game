@@ -65,3 +65,12 @@ window.SUSPECT_DECK = [
     ["חושך","The dark"],["גובה","Heights"],["בדידות","Loneliness"],["סיוט","A nightmare"],["עכביש","Spider"],
     ["איחור","Being late"],["דיבור מול קהל","Public speaking"],["מנהרה","A tunnel"],["להיאבד","Getting lost"],["מחט","A needle"]]}
 ];
+
+/* Packs group the categories so a table can choose its own flavour, and so
+   a long-running table can retire the ones it knows by heart. */
+window.SUSPECT_PACKS = [
+  { id: "base",    he: "בסיס",          en: "Everyday",     cats: ["food", "animals", "places", "jobs", "house", "sport"] },
+  { id: "mind",    he: "ראש ולב",       en: "Head & heart", cats: ["emotion", "body", "fear", "childhood"] },
+  { id: "culture", he: "תרבות",         en: "Culture",      cats: ["music", "screen", "clothes", "tech"] },
+  { id: "home",    he: "בית וישראל",    en: "Home",         cats: ["holiday", "family", "israel", "nature", "transport", "work"] }
+];

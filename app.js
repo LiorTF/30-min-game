@@ -42,6 +42,9 @@
     return { get: get, set: set, id: id };
   })();
   var Rules = window.SUSPECT_RULES;
+  var Roles = window.SUSPECT_ROLES;
+  var Dossier = window.SUSPECT_DOSSIER;
+  var PACKS = window.SUSPECT_PACKS || [];
 
   /* ---------------------------------------------------------
      Store — the transport in use.
@@ -74,6 +77,9 @@
     room: null,
     seats: [],
     seatedOnce: false,
+    dossier: null,
+    showDossier: false,
+    fresh: false,
     joinCode: "",
     error: "",
     clueError: "",
@@ -83,7 +89,8 @@
     copied: false,
     held: false,           /* card is being held open */
     pendingPaint: false,
-    lastSig: ""
+    lastSig: "",
+    lastPhaseKey: ""
   };
 
   function T() { return I18N[S.lang]; }
@@ -94,16 +101,39 @@
     });
   }
   function $(id) { return document.getElementById(id); }
-  function fill(s, n) { return String(s).replace("{n}", n); }
+  /* {name}, {n}, {from}… filled from a number or an object. */
+  function fmt(s, params) {
+    if (params == null) return String(s);
+    if (typeof params !== "object") params = { n: params };
+    return String(s).replace(/\{(\w+)\}/g, function (all, key) {
+      return params[key] == null ? all : String(params[key]);
+    });
+  }
+  var fill = fmt;
 
   /* roster helpers */
   function me() { for (var i = 0; i < S.seats.length; i++) if (S.seats[i].id === Prefs.id) return S.seats[i]; return null; }
   function seatOf(id) { for (var i = 0; i < S.seats.length; i++) if (S.seats[i].id === id) return S.seats[i]; return null; }
   function nameOf(id) { var p = seatOf(id); return p ? p.name : "—"; }
-  function roster() { return S.seats.filter(function (p) { return p.inRound; }); }
+  /* The players dealt into the round currently being played. A seat carries
+     the round it was dealt for, so a snapshot that has not caught up yet is
+     simply not counted — without this the host can read last round's "ready"
+     flags and skip a phase the table has not played. */
+  function roster() {
+    var round = (S.room && S.room.round) || 0;
+    return S.seats.filter(function (p) { return p.inRound && (p.seatRound || 0) === round; });
+  }
   function isHost() { return !!S.room && S.room.hostId === Prefs.id; }
   function imps() { return (S.room && S.room.impostorIds) || []; }
   function amImpostor() { return imps().indexOf(Prefs.id) !== -1; }
+  function roleOf(id) { return (S.room && S.room.roleById && S.room.roleById[id]) || "innocent"; }
+  function myRole() { return roleOf(Prefs.id); }
+  function idWithRole(role) {
+    var map = (S.room && S.room.roleById) || {}, k;
+    for (k in map) if (map[k] === role) return k;
+    return "";
+  }
+  function isLastTrial() { return !!S.room && S.room.trial === 1; }
   function away(p) { return Date.now() - (p.lastSeen || 0) > AWAY_MS; }
   function hostAway() {
     if (!S.room) return false;
@@ -144,7 +174,13 @@
 
   function settings() {
     var s = (S.room && S.room.settings) || {};
-    return { impostors: s.impostors || 1, clueRounds: s.clueRounds || 2, target: s.target == null ? 12 : s.target };
+    return {
+      impostors: s.impostors || 1,
+      clueRounds: s.clueRounds || 2,
+      target: s.target == null ? 12 : s.target,
+      roleMode: s.roleMode || "light",
+      packs: s.packs || []
+    };
   }
   function secret() {
     if (!S.room) return { cat: "", word: "" };
@@ -187,34 +223,64 @@
       return {
         code: "", hostId: Prefs.id, ownerId: Prefs.id, createdAt: Date.now(),
         phase: "lobby", round: 0, clueRound: 1, match: 1,
-        catIdx: 0, wordIdx: 0, impostorIds: [], options: [], order: [],
-        guess: -1, caught: false, caughtId: "", accusedId: "", tie: false,
-        settings: { impostors: 1, clueRounds: 2, target: 12 },
-        used: [], lastCat: -1, log: [], scoredRound: -1
+        table: Prefs.get("table", ""),
+        catIdx: 0, wordIdx: 0, confusedWordIdx: -1,
+        impostorIds: [], roleById: {}, witnessClearedId: "", accompliceKnows: [],
+        options: [], order: [],
+        guess: -1, caught: false, caughtId: "", accusedId: "", tie: false, outcome: "",
+        trial: 0,                       /* 0 none, 1 the last trial is running, 2 done */
+        settings: { impostors: 1, clueRounds: 2, target: 12, roleMode: "light", packs: [] },
+        used: [], lastCat: -1, log: [], scoredRound: -1,
+        story: null, ledger: null
       };
     },
 
-    startRound: function () {
+    startRound: function (asLastTrial) {
       if (!isHost() || S.seats.length < 3) return;
+      asLastTrial = asLastTrial === true;   /* never trust a stray event object */
       var r = S.room, cfg = settings();
-      var pick = Rules.pickWord(r.used || [], r.lastCat);
-      var used = pick.wrapped ? [] : (r.used || []).slice(-120);
+      if (!(r.round || 0)) Host.openNight();
+
+      var allowed = Rules.catsForPacks(cfg.packs, PACKS);
+      var pick = Rules.pickWord(r.used || [], r.lastCat, allowed);
+      var used = pick.wrapped ? [] : (r.used || []).slice(-160);
       used.push(pick.cat + ":" + pick.word);
 
-      var ids = Rules.shuffle(S.seats.map(function (p) { return p.id; }));
-      var count = Math.min(cfg.impostors, Rules.maxImpostors(S.seats.length));
-      var chosen = ids.slice(0, count);
+      var ids = S.seats.map(function (p) { return p.id; });
+      var deal = Roles.assign(ids, {
+        impostors: Math.min(cfg.impostors, Rules.maxImpostors(ids.length)),
+        roleMode: cfg.roleMode
+      });
 
+      /* The confused holds a real word from the same category — a wrong one.
+         They are never told, which is the entire point of the role. */
+      var confusedWordIdx = -1;
+      if (deal.confusedId) {
+        var decoys = Rules.guessOptions(pick.cat, pick.word).filter(function (i) { return i !== pick.word; });
+        confusedWordIdx = decoys.length ? decoys[0] : -1;
+        if (confusedWordIdx === -1) deal.roleById[deal.confusedId] = "innocent";
+      }
+
+      var nextRound = (r.round || 0) + 1;
       Promise.all(S.seats.map(function (p) {
-        return Store.updateSeat(p.id, { ready: false, clue: "", clue2: "", vote: "", delta: null, inRound: true });
+        return Store.updateSeat(p.id, {
+          ready: false, clue: "", clue2: "", vote: "", delta: null,
+          inRound: true, seatRound: nextRound
+        });
       })).then(function () {
         return Store.updateRoom({
-          phase: "reveal", round: (r.round || 0) + 1, clueRound: 1,
-          catIdx: pick.cat, wordIdx: pick.word, lastCat: pick.cat, used: used,
-          impostorIds: chosen,
+          phase: "reveal", round: nextRound, clueRound: 1,
+          catIdx: pick.cat, wordIdx: pick.word, confusedWordIdx: confusedWordIdx,
+          lastCat: pick.cat, used: used,
+          impostorIds: deal.impostorIds,
+          roleById: deal.roleById,
+          witnessClearedId: deal.witnessClearedId,
+          accompliceKnows: deal.accompliceId ? deal.impostorIds : [],
           options: Rules.guessOptions(pick.cat, pick.word),
-          order: Rules.shuffle(S.seats.map(function (p) { return p.id; })),
-          guess: -1, caught: false, caughtId: "", accusedId: "", tie: false
+          order: Rules.shuffle(ids.slice()),
+          guess: -1, caught: false, caughtId: "", accusedId: "", tie: false, outcome: "",
+          trial: asLastTrial ? 1 : (r.trial === 1 ? 2 : r.trial || 0),
+          story: null
         });
       })["catch"](function () {});
     },
@@ -256,53 +322,151 @@
       } else if (r.phase === "vote") {
         if (all(function (p) { return p.vote; })) {
           var v = Rules.tally(list);
-          var caughtId = v.accused && imps().indexOf(v.accused) !== -1 ? v.accused : "";
-          if (caughtId) {
+          var outcome = Roles.outcome(v.accused, imps(), idWithRole("jester"));
+          if (outcome === "caught") {
             go(function () {
               return Store.updateRoom({
-                phase: "guess", caught: true, caughtId: caughtId,
-                accusedId: v.accused, tie: v.tie
+                phase: "guess", caught: true, caughtId: v.accused,
+                accusedId: v.accused, tie: v.tie, outcome: outcome
               });
             });
           } else {
+            /* the jester's round and a clean escape both end here — there is
+               no word for anyone to guess back */
             if (r.scoredRound === r.round) return;
-            go(function () { return Host.settle(list, "", false, { accusedId: v.accused, tie: v.tie }); });
+            go(function () {
+              return Host.settle(list, { outcome: outcome, accusedId: v.accused, tie: v.tie,
+                                         caughtId: "", guessRight: false });
+            });
           }
         }
 
       } else if (r.phase === "guess") {
         if (r.guess !== -1) {
           if (r.scoredRound === r.round) return;
-          go(function () { return Host.settle(list, r.caughtId, r.guess === r.wordIdx, {}); });
+          go(function () {
+            return Host.settle(list, { outcome: "caught", accusedId: r.accusedId,
+                                       caughtId: r.caughtId, guessRight: r.guess === r.wordIdx,
+                                       tie: r.tie });
+          });
         }
       }
     },
 
-    /* Write the round's points, the log entry, and move to the verdict. */
-    settle: function (list, caughtId, guessRight, extra) {
+    /* Write the round's points, fold it into the table's record, and move to
+       the verdict. This is the only place a point is ever awarded. */
+    settle: function (list, res) {
       var r = S.room;
       if (r.scoredRound === r.round) return Promise.resolve();
       r.scoredRound = r.round;          /* claim the round before writing a point */
-      var deltas = Rules.score(list, imps(), caughtId, guessRight);
-      var jobs = list.map(function (p) {
-        return Store.updateSeat(p.id, { score: (p.score || 0) + (deltas[p.id] || 0), delta: deltas[p.id] || 0 });
+
+      var deltas = Roles.score({
+        roster: list,
+        roleById: r.roleById || {},
+        impostorIds: imps(),
+        outcome: res.outcome,
+        caughtId: res.caughtId,
+        accusedId: res.accusedId,
+        guessRight: res.guessRight,
+        double: r.trial === 1
       });
+
+      var jobs = list.map(function (p) {
+        return Store.updateSeat(p.id, {
+          score: (p.score || 0) + (deltas[p.id] || 0),
+          delta: deltas[p.id] || 0
+        });
+      });
+
       var entry = {
         r: r.round,
         word: DECK[r.catIdx].w[r.wordIdx],
         imps: imps().map(nameOf),
-        caught: !!caughtId
+        caught: res.outcome === "caught",
+        outcome: res.outcome
       };
       var log = ((r.log || []).concat([entry])).slice(-12);
+
+      /* the table's long memory, kept on this device */
+      var story = null, ledger = null;
+      var book = Host.dossier();
+      if (book) {
+        book = Dossier.record(book, {
+          round: r.round,
+          word: DECK[r.catIdx].w[r.wordIdx],
+          seats: list.map(function (p) {
+            return { id: p.id, name: p.name, vote: p.vote, clue: p.clue, clue2: p.clue2,
+                     delta: deltas[p.id] || 0 };
+          }),
+          roleById: r.roleById || {},
+          impostorIds: imps(),
+          accusedId: res.accusedId,
+          caughtId: res.caughtId,
+          outcome: res.outcome,
+          guessRight: res.guessRight
+        });
+        S.dossier = book;
+        Dossier.save(book);
+        story = Host.story(book, {
+          seats: list, impostorIds: imps(), accusedId: res.accusedId,
+          caughtId: res.caughtId, outcome: res.outcome
+        });
+        ledger = Host.ledger(book);
+      }
+
       return Promise.all(jobs).then(function () {
-        var patch = {
-          phase: "results", caught: !!caughtId, caughtId: caughtId,
-          scoredRound: r.round, log: log
-        };
-        if (extra.accusedId !== undefined) patch.accusedId = extra.accusedId;
-        if (extra.tie !== undefined) patch.tie = extra.tie;
-        return Store.updateRoom(patch);
+        return Store.updateRoom({
+          phase: "results",
+          caught: res.outcome === "caught",
+          caughtId: res.caughtId || "",
+          accusedId: res.accusedId || "",
+          tie: !!res.tie,
+          outcome: res.outcome,
+          scoredRound: r.round,
+          log: log,
+          story: story,
+          ledger: ledger
+        });
       });
+    },
+
+    /* The dossier belongs to whoever opens the rooms. Loaded on demand so a
+       guest never touches it. */
+    dossier: function () {
+      if (!isHost() || !S.room) return null;
+      var table = S.room.table || Prefs.get("table", "") || "";
+      if (!S.dossier || S.dossier.table !== table) S.dossier = Dossier.load(table);
+      return S.dossier;
+    },
+
+    /* A new night on the books, the first time a round is dealt. */
+    openNight: function () {
+      var book = Host.dossier();
+      if (!book) return;
+      S.dossier = Dossier.openNight(book, S.seats.map(function (p) { return p.name; }));
+      Dossier.save(S.dossier);
+    },
+
+    story: function (book, round) {
+      return {
+        note: Dossier.note(book, round),
+        titles: Dossier.titles(book),
+        nemesis: Dossier.nemesis(book),
+        nights: book.nights,
+        table: book.table
+      };
+    },
+
+    /* A compact all-time table everyone in the room can see. */
+    ledger: function (book) {
+      var rows = Object.keys(book.players).map(function (name) {
+        var p = book.players[name];
+        return { name: name, points: p.points, rounds: p.rounds,
+                 imp: p.impostorRounds, caught: p.caught, escaped: p.escaped,
+                 votes: p.votesCast, right: p.votesCorrect,
+                 bluff: p.bestBluff ? p.bestBluff.clue : "" };
+      }).sort(function (a, b) { return b.points - a.points; }).slice(0, 16);
+      return { table: book.table, nights: book.nights, rows: rows, records: book.records };
     },
 
     /* The host can move past anyone who has walked away from their phone. */
@@ -338,14 +502,41 @@
 
     toChampion: function () { Store.updateRoom({ phase: "champion" })["catch"](function () {}); },
 
+    setTable: function (name) {
+      if (!isHost()) return;
+      name = String(name || "").slice(0, 28);
+      Prefs.set("table", name);
+      S.dossier = null;                       /* a different table, a different record */
+      Store.updateRoom({ table: name })["catch"](function () {});
+    },
+
+    lastTrial: function () { Host.startRound(true); },
+
+    /* No packs chosen means the whole deck, so the first tap turns everything
+       on explicitly and then removes the one that was tapped. The deck is
+       never allowed to end up empty. */
+    togglePack: function (id) {
+      if (!isHost()) return;
+      var s = settings();
+      var packs = s.packs.length ? s.packs.slice() : PACKS.map(function (p) { return p.id; });
+      var at = packs.indexOf(id);
+      if (at === -1) packs.push(id); else packs.splice(at, 1);
+      if (!packs.length) packs = [id];
+      s.packs = packs;
+      if (S.room) S.room.settings = s;
+      App.paint();
+      Store.updateRoom({ settings: s })["catch"](function () {});
+    },
+
     newMatch: function () {
       if (!isHost()) return;
       Promise.all(S.seats.map(function (p) {
-        return Store.updateSeat(p.id, { score: 0, delta: null, ready: false, clue: "", clue2: "", vote: "", inRound: false });
+        return Store.updateSeat(p.id, { score: 0, delta: null, ready: false, clue: "", clue2: "", vote: "", inRound: false, seatRound: 0 });
       })).then(function () {
         return Store.updateRoom({
           phase: "lobby", round: 0, log: [], used: [], lastCat: -1,
-          scoredRound: -1, match: (S.room.match || 1) + 1
+          scoredRound: -1, trial: 0, story: null,
+          match: (S.room.match || 1) + 1
         });
       })["catch"](function () {});
     },
@@ -365,12 +556,14 @@
       var d = {
         id: Prefs.id, name: S.name.trim().slice(0, 18), score: 0,
         joinedAt: Date.now(), lastSeen: Date.now(),
-        inRound: false, ready: false, clue: "", clue2: "", vote: "", delta: null
+        inRound: false, ready: false, clue: "", clue2: "", vote: "", delta: null,
+        seatRound: 0
       };
       if (previous) {
         d.score = previous.score || 0;
         d.joinedAt = previous.joinedAt || d.joinedAt;
         d.inRound = !!previous.inRound;
+        d.seatRound = previous.seatRound || 0;
         d.ready = !!previous.ready;
         d.clue = previous.clue || "";
         d.clue2 = previous.clue2 || "";
@@ -478,6 +671,8 @@
         '<details class="rules panel panel--quiet enter"><summary>', esc(L.rulesTitle), '</summary>',
         '<ol>', L.rules.map(function (r) { return "<li>" + r + "</li>"; }).join(""), '</ol>',
         '<p class="rules__tip">', esc(L.scoreNote), ' · ', esc(L.tip), '</p>',
+        '<p class="kicker kicker--quiet" style="margin-block-start:var(--s4)">', esc(L.rolesHowTitle), '</p>',
+        '<ul class="rules__roles">', L.rolesHow.map(function (r) { return "<li>" + r + "</li>"; }).join(""), '</ul>',
         '</details>'
       ].join("");
     },
@@ -521,9 +716,8 @@
           tags += '<button class="remove" type="button" data-kick="' + esc(p.id) +
                   '" aria-label="' + esc(L.kick) + ' ' + esc(p.name) + '" title="' + esc(L.kick) + '">&times;</button>';
         }
-        var delta = opts.delta && p.delta != null
-          ? '<span class="delta' + (p.delta ? '' : ' delta--zero') + '">' + (p.delta > 0 ? "+" : "") + p.delta + '</span>'
-          : '';
+        /* only a point actually won gets a chip; a row of zeroes is noise */
+        var delta = (opts.delta && p.delta) ? '<span class="delta">+' + p.delta + '</span>' : '';
         return [
           '<li class="', p.id === Prefs.id ? "is-me " : "", (opts.score && crown === p.id) ? "lead" : "", '">',
           '<span class="seat">', i + 1, '</span>',
@@ -553,6 +747,10 @@
       var seg = function (name, value, current, label, disabled) {
         return '<button type="button" data-set="' + name + '" data-val="' + value + '" aria-pressed="' +
           (current === value) + '"' + (disabled || !isHost() ? ' disabled' : '') + '>' + esc(label) + '</button>';
+      };
+      var segStr = function (name, value, current, label) {
+        return '<button type="button" data-setstr="' + name + '" data-val="' + esc(value) + '" aria-pressed="' +
+          (current === value) + '"' + (isHost() ? '' : ' disabled') + '>' + esc(label) + '</button>';
       };
       return [
         '<section class="panel panel--lift panel--pad enter">',
@@ -590,7 +788,30 @@
         '<div class="seg">', seg("target", 8, cfg.target, "8"), seg("target", 12, cfg.target, "12"),
         seg("target", 20, cfg.target, "20"), seg("target", 0, cfg.target, L.noTarget), '</div>',
         '</div>',
+
+        '<div class="setting"><span class="field__label">', esc(L.setRoles), '</span>',
+        '<div class="seg">',
+        segStr("roleMode", "off", cfg.roleMode, L.roleOff),
+        segStr("roleMode", "light", cfg.roleMode, L.roleLight),
+        segStr("roleMode", "full", cfg.roleMode, L.roleFull),
+        '</div>',
+        '<p class="note">', esc(L.setRolesNote), '</p>',
+        cfg.roleMode !== "off" ? View.roleChips(cfg) : '',
+        '</div>',
+
+        '<div class="setting"><span class="field__label">', esc(L.setPacks), '</span>',
+        '<div class="packs">',
+        PACKS.map(function (p) {
+          var on = !cfg.packs.length || cfg.packs.indexOf(p.id) !== -1;
+          return '<button type="button" class="pack' + (on ? ' is-on' : '') + '" data-pack="' + esc(p.id) + '"' +
+                 (isHost() ? '' : ' disabled') + ' aria-pressed="' + on + '">' + esc(p[S.lang]) + '</button>';
+        }).join(''),
+        '</div>',
+        '<p class="note">', esc(fmt(L.wordsInPlay, Rules.wordsAvailable(Rules.catsForPacks(cfg.packs, PACKS)))), '</p>',
+        '</div>',
         '</section>',
+
+        View.tablePanel(),
 
         canStart
           ? '<button class="btn enter" type="button" id="btnStart">' + esc(L.start) + '</button>'
@@ -598,6 +819,40 @@
         View.hostTools(),
         View.rules(),
         '<button class="btn btn--quiet btn--sm" type="button" id="btnLeave">', esc(L.leave), '</button>'
+      ].join("");
+    },
+
+    /* Which extra roles this table size actually fields, so the host can see
+       what turning roles on will mean before the round starts. */
+    roleChips: function (cfg) {
+      var L = T();
+      var live = Roles.available(S.seats.length, cfg.roleMode);
+      var all = Roles.MODES[cfg.roleMode] || [];
+      if (!all.length) return "";
+      return '<div class="chips">' + all.map(function (role) {
+        var on = live.indexOf(role) !== -1;
+        var label = L["role" + role.charAt(0).toUpperCase() + role.slice(1)];
+        return '<span class="chip' + (on ? ' chip--on' : '') + '">' + esc(label) +
+               (on ? '' : ' <span class="muted">' + Roles.UNLOCK[role] + '+</span>') + '</span>';
+      }).join('') + '</div>';
+    },
+
+    /* The table's name is the key to its record. */
+    tablePanel: function () {
+      var L = T(), r = S.room;
+      var nights = r.ledger && r.ledger.nights;
+      return [
+        '<section class="panel enter">',
+        '<p class="kicker kicker--quiet">', esc(L.dossierTitle), '</p>',
+        isHost()
+          ? '<label class="field" for="tableIn"><span class="field__label">' + esc(L.tableLabel) + '</span>' +
+            '<input class="input" type="text" id="tableIn" maxlength="28" placeholder="' + esc(L.tablePh) + '" value="' + esc(r.table || "") + '"></label>'
+          : '<p class="serif" style="font-size:20px">' + esc(r.table || L.tablePh) + '</p>',
+        nights ? '<p class="note">' + esc(fmt(L.tableNight, nights)) + '</p>' : '',
+        (r.ledger && r.ledger.rows && r.ledger.rows.length)
+          ? '<button class="btn btn--ghost btn--sm" type="button" id="btnDossier">' + esc(L.dossierOpen) + '</button>'
+          : '<p class="note">' + esc(L.dossierEmpty) + '</p>',
+        '</section>'
       ].join("");
     },
 
@@ -616,14 +871,37 @@
     reveal: function () {
       var L = T(), m = me();
       if (!m || !m.inRound) return View.waitingRoom();
-      var sec = secret(), imp = amImpostor(), list = roster();
+      var r = S.room, sec = secret(), role = myRole(), list = roster();
       var readyN = list.filter(function (p) { return p.ready; }).length;
+      var isImp = role === "impostor";
+
+      /* The confused is shown a real word from the same category — the wrong
+         one — and is given no hint whatsoever that anything is different.
+         Their card must be indistinguishable from an innocent's. */
+      var shown = (role === "confused" && r.confusedWordIdx >= 0)
+        ? wordAt(r.confusedWordIdx) : sec.word;
+
       var others = imps().length - 1;
-      var company = others === 1 ? " " + L.impHint2 : (others > 1 ? " " + fill(L.impHint3, others) : "");
+      var aside = "";
+      if (isImp) {
+        aside = L.impHint + (others === 1 ? " " + L.impHint2 : (others > 1 ? " " + fmt(L.impHint3, others) : ""));
+      } else if (role === "witness") {
+        aside = fmt(L.witnessLine, { names: nameOf(r.witnessClearedId) });
+      } else if (role === "accomplice") {
+        var names = (r.accompliceKnows || []).map(nameOf).join(", ");
+        aside = fmt(names.indexOf(",") !== -1 ? L.accompliceLineMany : L.accompliceLine, { names: names });
+      } else if (role === "jester") {
+        aside = L.jesterLine;
+      }
+
+      /* the role's own name, except for the two who must not know theirs */
+      var badge = (role === "innocent" || role === "confused") ? "" : L["role" + role.charAt(0).toUpperCase() + role.slice(1)];
+
       return [
         View.steps(),
+        View.trialBanner(),
         '<section class="block enter">',
-        '<p class="kicker">', esc(L.round), ' ', S.room.round, ' · ', esc(L.category), ' — ', esc(sec.cat), '</p>',
+        '<p class="kicker">', esc(L.round), ' ', r.round, ' · ', esc(L.category), ' — ', esc(sec.cat), '</p>',
         '<h2>', esc(L.revealTitle), '</h2>',
         '<p class="note">', esc(L.revealSub), '</p>',
         '</section>',
@@ -631,10 +909,11 @@
         '<div class="holder enter">',
         '<div class="flip', S.held ? ' is-open' : '', '" id="card" tabindex="0" role="button" aria-label="', esc(L.holdToSee), '">',
         '<div class="flip__face flip__back"><div class="seal">?</div><p class="hint">', esc(L.holdToSee), '</p></div>',
-        '<div class="flip__face flip__front', imp ? ' is-imp' : '', '">',
+        '<div class="flip__face flip__front', isImp ? ' is-imp' : '', ' role-', esc(role), '">',
         '<p class="hint">', esc(sec.cat), '</p>',
-        '<div class="flip__word">', esc(imp ? L.youAreImp : sec.word), '</div>',
-        imp ? '<p class="hint hint--wide">' + esc(L.impHint + company) + '</p>' : '',
+        badge ? '<p class="rolechip">' + esc(badge) + '</p>' : '',
+        '<div class="flip__word">', esc(isImp ? L.youAreImp : shown), '</div>',
+        aside ? '<p class="hint hint--wide">' + esc(aside) + '</p>' : '',
         '</div></div></div>',
 
         m.ready
@@ -642,6 +921,15 @@
           : '<button class="btn enter" type="button" id="btnReady">' + esc(L.ready) + '</button>',
         View.hostTools()
       ].join("");
+    },
+
+    /* The last trial is loud on purpose: it is the only round that matters
+       more than the one before it. */
+    trialBanner: function () {
+      if (!isLastTrial()) return "";
+      var L = T();
+      return '<div class="trial enter"><span class="trial__name">' + esc(L.lastTrial) + '</span>' +
+             '<span class="trial__note">' + esc(L.lastTrialNote) + '</span></div>';
     },
 
     clues: function () {
@@ -691,13 +979,13 @@
          so the whole table still reads as one block. */
       var dense = order.length > 8 ? " clues--dense" : "";
       var showImp = ["results", "champion"].indexOf(S.room.phase) !== -1;
-      return '<ul class="clues' + dense + '">' + order.map(function (id) {
+      return '<ul class="clues' + dense + (S.fresh ? " clues--fresh" : "") + '">' + order.map(function (id, i) {
         var p = seatOf(id);
         var isImp = showImp && imps().indexOf(id) !== -1;
         var first = p.clue || "—";
         var second = only === 1 ? "" : (p.clue2 || "");
         return [
-          '<li class="', isImp ? "is-imp" : "", '">',
+          '<li class="', isImp ? "is-imp" : "", '" style="animation-delay:', (i * 85), 'ms">',
           '<span class="clues__who">', esc(p.name), '</span>',
           '<span class="clues__words">',
           '<span class="clues__w">', esc(first), '</span>',
@@ -770,12 +1058,18 @@
 
     results: function () {
       var L = T(), r = S.room, sec = secret(), list = roster();
-      var caught = !!r.caught, two = imps().length > 1;
+      var outcome = r.outcome || (r.caught ? "caught" : "escaped");
+      var many = imps().length > 1;
       var v = Rules.tally(list);
       var maxVotes = Math.max(1, v.top);
       var guessed = r.guess >= 0 && r.guess !== -2;
       var right = r.guess === r.wordIdx;
       var over = matchOver();
+      var jesterId = idWithRole("jester");
+
+      var badge = outcome === "jester" ? { cls: "badge--jester", text: L.outJester }
+                : outcome === "caught" ? { cls: "badge--good", text: many ? L.impsCaught : L.impCaught }
+                : { cls: "badge--bad", text: L.impEscaped };
 
       var bars = list.map(function (p) {
         var n = v.counts[p.id] || 0;
@@ -791,35 +1085,87 @@
 
       return [
         View.steps(),
-        '<section class="panel panel--lift panel--pad verdict enter">',
-        '<span class="badge ', caught ? 'badge--good' : 'badge--bad', '">',
-        esc(caught ? (two ? L.impsCaught : L.impCaught) : L.impEscaped), '</span>',
-        '<p class="kicker kicker--quiet" style="justify-content:center">', esc(two ? L.theImps : L.theImp), '</p>',
-        '<div class="verdict__name">', esc(imps().map(nameOf).join(" · ")), '</div>',
+        '<section class="panel panel--lift panel--pad verdict', S.fresh ? ' is-fresh' : '', '">',
+        '<span class="badge stamp ', badge.cls, '">', esc(badge.text), '</span>',
+        outcome === "jester"
+          ? '<div class="verdict__name">' + esc(nameOf(jesterId)) + '</div>'
+          : '<p class="kicker kicker--quiet" style="justify-content:center">' + esc(many ? L.theImps : L.theImp) + '</p>' +
+            '<div class="verdict__name">' + esc(imps().map(nameOf).join(" · ")) + '</div>',
         '<p class="kicker kicker--quiet" style="justify-content:center">', esc(L.theWord), '</p>',
         '<div class="verdict__word">', esc(sec.word), '</div>',
-        caught
-          ? (guessed
-              ? '<p class="note">' + (right
-                  ? esc(L.stole)
-                  : esc(L.guessWas) + ' \u201C' + esc(wordAt(r.guess)) + '\u201D \u2014 ' + esc(L.wrongGuess)) + '</p>'
-              : '')
-          : (r.tie ? '<p class="note">' + esc(L.noMajority) + '</p>' : ''),
+        outcome === "caught" && guessed
+          ? '<p class="note">' + (right ? esc(L.stole)
+              : esc(L.guessWas) + ' \u201C' + esc(wordAt(r.guess)) + '\u201D \u2014 ' + esc(L.wrongGuess)) + '</p>'
+          : (outcome === "escaped" && r.tie ? '<p class="note">' + esc(L.noMajority) + '</p>' : ''),
+        isLastTrial() ? '<span class="tag tag--double">' + esc(L.doubleTag) + '</span>' : '',
         '</section>',
 
+        View.storyLine(),
+
         '<section class="block enter"><p class="kicker kicker--quiet">', esc(L.clues), '</p>', View.clueList(), '</section>',
+        View.rolesLedger(),
         '<section class="panel enter"><p class="kicker kicker--quiet">', esc(L.votesFor), '</p><div class="bars">', bars, '</div></section>',
-        '<section class="panel enter"><p class="kicker kicker--quiet">', esc(L.standings), '</p>', View.roster({ score: true, delta: true, rank: true }), '</section>',
+        '<section class="panel enter"><p class="kicker kicker--quiet">', esc(L.standings), '</p>',
+        View.roster({ score: true, delta: true, rank: true }),
+        (r.ledger && r.ledger.rows && r.ledger.rows.length)
+          ? '<button class="btn btn--quiet btn--sm" type="button" id="btnDossier">' + esc(L.dossierOpen) + '</button>'
+          : '',
+        '</section>',
         (r.log && r.log.length > 1) ? View.history() : '',
 
         isHost()
-          ? (over
-              ? '<button class="btn enter" type="button" id="btnChampion">' + esc(L.finalTable) + '</button>'
-              : (S.seats.length >= 3
-                  ? '<button class="btn enter" type="button" id="btnStart">' + esc(L.nextRound) + '</button>'
-                  : '<p class="status">' + esc(L.needMore) + '</p>'))
+          ? (over && r.trial === 0
+              ? '<button class="btn btn--trial enter" type="button" id="btnLastTrial">' + esc(L.lastTrialGo) + '</button>'
+              : (over
+                  ? '<button class="btn enter" type="button" id="btnChampion">' + esc(L.finalTable) + '</button>'
+                  : (S.seats.length >= 3
+                      ? '<button class="btn enter" type="button" id="btnStart">' + esc(L.nextRound) + '</button>'
+                      : '<p class="status">' + esc(L.needMore) + '</p>')))
           : '<p class="status">' + esc(L.waitNext) + '</p>',
         View.hostTools()
+      ].join("");
+    },
+
+    /* What the table did, in one sentence, drawn from everything it has ever
+       done. This is the line people repeat back to each other. */
+    storyLine: function () {
+      var r = S.room, L = T();
+      if (!r.story || !r.story.note) return "";
+      var n = r.story.note;
+      var text = L[n.key];
+      if (!text) return "";
+      return '<p class="story' + (S.fresh ? " is-fresh" : "") + '">' + esc(fmt(text, n)) + '</p>';
+    },
+
+    /* Every role, revealed. Half the fun of the roles is the moment the
+       table finds out the quiet one was holding the wrong word all along. */
+    rolesLedger: function () {
+      var L = T(), r = S.room, list = roster();
+      var anyRole = list.some(function (p) {
+        var role = roleOf(p.id);
+        return role !== "innocent" && role !== "impostor";
+      });
+      if (!anyRole) return "";
+      return [
+        '<section class="panel enter"><p class="kicker kicker--quiet">', esc(L.rolesTitle), '</p>',
+        '<ul class="ledger">',
+        list.map(function (p) {
+          var role = roleOf(p.id);
+          if (role === "innocent") return "";
+          var label = L["role" + role.charAt(0).toUpperCase() + role.slice(1)];
+          var extra = "";
+          if (role === "confused" && r.confusedWordIdx >= 0) {
+            extra = '<span class="ledger__word">\u201C' + esc(wordAt(r.confusedWordIdx)) + '\u201D</span>';
+          }
+          return '<li class="ledger__row role-' + esc(role) + '">' +
+                 '<span class="ledger__name">' + esc(p.name) + '</span>' +
+                 extra +
+                 '<span class="ledger__role">' + esc(label) + '</span></li>';
+        }).join(""),
+        '</ul>',
+        list.some(function (p) { return roleOf(p.id) === "confused"; })
+          ? '<p class="note">' + esc(L.confusedReveal) + '</p>' : '',
+        '</section>'
       ].join("");
     },
 
@@ -840,27 +1186,118 @@
     },
 
     champion: function () {
-      var L = T(), top = leader();
+      var L = T(), top = leader(), r = S.room;
       var winners = S.seats.filter(function (p) { return (p.score || 0) === top; });
       return [
         '<section class="panel panel--lift panel--pad enter">',
-        '<div class="crown">',
-        '<div class="crown__ring">★</div>',
+        '<div class="crown', S.fresh ? ' is-fresh' : '', '">',
+        '<div class="crown__ring">\u2605</div>',
         '<p class="kicker kicker--quiet" style="justify-content:center">', esc(L.champion), '</p>',
         '<div class="crown__name">', esc(winners.map(function (p) { return p.name; }).join(" · ")), '</div>',
         '<p class="crown__score tnum">', top, '</p>',
+        (r.story && r.story.nights) ? '<p class="note">' + esc(r.table || "") + ' · ' + esc(fmt(L.tableNight, r.story.nights)) + '</p>' : '',
         '</div></section>',
+
         '<section class="panel enter"><p class="kicker kicker--quiet">', esc(L.finalTable), '</p>',
         View.roster({ score: true, rank: true }), '</section>',
+
+        View.titlesPanel(),
         View.history(),
+
         isHost()
           ? '<div class="row"><button class="btn" type="button" id="btnNewMatch">' + esc(L.newMatch) + '</button>' +
             '<button class="btn btn--ghost" type="button" id="btnPlayOn">' + esc(L.playOn) + '</button></div>'
-          : '<p class="status">' + esc(L.waitHost) + '</p>'
+          : '<p class="status">' + esc(L.waitHost) + '</p>',
+        (r.ledger && r.ledger.rows && r.ledger.rows.length)
+          ? '<button class="btn btn--quiet btn--sm" type="button" id="btnDossier">' + esc(L.dossierOpen) + '</button>' : ''
+      ].join("");
+    },
+
+    /* Standing titles: what this table has decided about each other over
+       every night it has ever played. */
+    titlesPanel: function () {
+      var L = T(), story = S.room.story;
+      if (!story || !((story.titles && story.titles.length) || story.nemesis)) return "";
+      return [
+        '<section class="panel enter">',
+        '<p class="kicker kicker--quiet">', esc(L.titlesTitle), '</p>',
+        (story.titles && story.titles.length)
+          ? '<ul class="titles">' + story.titles.map(function (t, i) {
+              var name = L["title" + t.key.charAt(0).toUpperCase() + t.key.slice(1)];
+              var note = L["title" + t.key.charAt(0).toUpperCase() + t.key.slice(1) + "Note"];
+              return '<li class="title-card" style="animation-delay:' + (i * 70) + 'ms">' +
+                     '<span class="title-card__name">' + esc(name) + '</span>' +
+                     '<span class="title-card__holder">' + esc(t.name) + '</span>' +
+                     '<span class="title-card__note">' + esc(fmt(note, t.value)) + '</span></li>';
+            }).join("") + '</ul>'
+          : '',
+        story.nemesis
+          ? '<p class="note">' + esc(fmt(L.nemesisLine, {
+              from: story.nemesis.from, to: story.nemesis.to, n: story.nemesis.count })) + '</p>'
+          : '',
+        '</section>'
+      ].join("");
+    },
+
+    /* Everything this table has ever done, for the arguments between rounds. */
+    dossier: function () {
+      var L = T(), r = S.room, led = r.ledger || { rows: [] }, recs = led.records || {};
+      var rows = led.rows || [];
+      return [
+        '<section class="block enter">',
+        '<p class="kicker">', esc(L.dossierTitle), '</p>',
+        '<h2>', esc(led.table || r.table || L.tablePh), '</h2>',
+        led.nights ? '<p class="note">' + esc(fmt(L.tableNight, led.nights)) + '</p>' : '',
+        '</section>',
+
+        View.titlesPanel(),
+
+        '<section class="panel enter">',
+        '<p class="kicker kicker--quiet">', esc(L.allTime), '</p>',
+        '<ul class="book">',
+        rows.map(function (row, i) {
+          var acc = row.votes ? Math.round(row.right / row.votes * 100) : null;
+          var meta = [row.rounds + " " + L.colRounds];
+          if (row.imp) meta.push(row.escaped + "/" + row.imp + " " + L.colImp);
+          if (acc != null) meta.push(acc + "% " + L.voted);
+          return [
+            '<li class="book__row">',
+            '<span class="seat">', i + 1, '</span>',
+            '<span class="book__main">',
+            '<span class="book__name">', esc(row.name), '</span>',
+            '<span class="book__meta">', esc(meta.join(" \u00B7 ")), '</span>',
+            row.bluff
+              ? '<span class="book__bluff"><span class="muted">' + esc(L.bestBluffTitle) +
+                '</span>\u201C' + esc(row.bluff) + '\u201D</span>'
+              : '',
+            '</span>',
+            '<span class="score tnum">', row.points, '</span>',
+            '</li>'
+          ].join("");
+        }).join(""),
+        '</ul>',
+        '</section>',
+
+        (recs.longestEscape || recs.mostUnanimous)
+          ? '<section class="panel enter"><p class="kicker kicker--quiet">' + esc(L.recordsTitle) + '</p>' +
+            '<ul class="roster">' +
+            (recs.longestEscape
+              ? '<li><span class="roster__name">' + esc(L.recLongest) + '</span><span class="tag">' +
+                esc(recs.longestEscape.name) + '</span><span class="score tnum">' +
+                recs.longestEscape.streak + '</span></li>' : '') +
+            (recs.mostUnanimous
+              ? '<li><span class="roster__name">' + esc(L.recUnanimous) + '</span><span class="tag">' +
+                esc(recs.mostUnanimous.name) + '</span><span class="score tnum">' +
+                recs.mostUnanimous.votes + '/' + recs.mostUnanimous.of + '</span></li>' : '') +
+            '</ul></section>'
+          : '',
+
+        '<button class="btn btn--ghost" type="button" id="btnDossierClose">', esc(L.dossierClose), '</button>'
       ].join("");
     },
 
     room: function () {
+      if (S.showDossier) return View.dossier();
       var p = S.room.phase;
       if (p === "lobby") return View.lobby();
       if (p === "reveal") return View.reveal();
@@ -921,10 +1358,14 @@
       var r = S.room;
       return JSON.stringify([
         S.view, S.lang, S.error, S.clueError, S.clueDraft.length > 0, S.busy, S.copied, S.joinCode,
+        S.showDossier,
         r && [r.phase, r.round, r.clueRound, r.catIdx, r.wordIdx, r.guess, r.caught, r.caughtId,
-              r.hostId, r.impostorIds, r.settings, (r.log || []).length, r.order],
+              r.hostId, r.impostorIds, r.settings, (r.log || []).length, r.order,
+              r.outcome, r.trial, r.table, r.roleById, r.confusedWordIdx,
+              r.story && r.story.note, (r.story && r.story.titles || []).length,
+              (r.ledger && r.ledger.nights) || 0],
         S.seats.map(function (p) {
-          return [p.id, p.name, p.score, p.delta, p.ready, p.clue, p.clue2, p.vote, p.inRound,
+          return [p.id, p.name, p.score, p.delta, p.ready, p.clue, p.clue2, p.vote, p.inRound, p.seatRound,
                   Date.now() - (p.lastSeen || 0) > AWAY_MS];
         })
       ]);
@@ -935,6 +1376,13 @@
       var sig = App.signature();
       if (!force && sig === S.lastSig) return;
       S.lastSig = sig;
+
+      /* Entrance animations should play when the round moves on, not every
+         time somebody's vote lands and the screen redraws. */
+      var phaseKey = S.room ? [S.view, S.room.phase, S.room.round, S.room.clueRound, S.showDossier].join(":")
+                            : S.view;
+      S.fresh = phaseKey !== S.lastPhaseKey;
+      S.lastPhaseKey = phaseKey;
 
       var L = T();
       document.documentElement.lang = S.lang;
@@ -980,7 +1428,7 @@
       App.on("btnCreate", "click", Play.create);
       App.on("btnJoin", "click", function () { Play.join(S.joinCode); });
       App.on("btnLeave", "click", Play.leave);
-      App.on("btnStart", "click", Host.startRound);
+      App.on("btnStart", "click", function () { Host.startRound(false); });
       App.on("btnReady", "click", Play.ready);
       App.on("btnSkip", "click", Host.skipWaiting);
       App.on("btnClaim", "click", Host.claim);
@@ -1001,6 +1449,21 @@
       App.on("clueIn", "input", function (e) { S.clueDraft = e.target.value; S.clueError = ""; });
       App.on("clueIn", "keydown", function (e) { if (e.key === "Enter") Play.sendClue(); });
       App.on("btnClue", "click", Play.sendClue);
+
+      App.on("btnLastTrial", "click", Host.lastTrial);
+      App.on("btnDossier", "click", function () { S.showDossier = true; App.paint(true); });
+      App.on("btnDossierClose", "click", function () { S.showDossier = false; App.paint(true); });
+      App.on("tableIn", "change", function (e) { Host.setTable(e.target.value); });
+      App.on("tableIn", "keydown", function (e) { if (e.key === "Enter") e.target.blur(); });
+
+      App.each("[data-setstr]", function (b) {
+        b.addEventListener("click", function () {
+          Host.setSetting(b.getAttribute("data-setstr"), b.getAttribute("data-val"));
+        });
+      });
+      App.each("[data-pack]", function (b) {
+        b.addEventListener("click", function () { Host.togglePack(b.getAttribute("data-pack")); });
+      });
 
       App.each("[data-set]", function (b) {
         b.addEventListener("click", function () {

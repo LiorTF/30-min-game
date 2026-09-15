@@ -1,0 +1,61 @@
+name: Publish the game
+
+on:
+  push:
+    branches: ["claude/multiplayer-hebrew-game-xpevsr"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  # The pure-logic suites need no browser, so every push is checked.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Rules, roles, the dossier and the copy
+        run: |
+          node tests/rules.test.js
+          node tests/roles.test.js
+          node tests/dossier.test.js
+          node tests/i18n.test.js
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gather just the files the game serves
+        run: |
+          mkdir -p _site/vendor
+          cp index.html styles.css app.js _site/
+          cp deck.js i18n.js rules.js roles.js dossier.js _site/
+          cp net-artifact.js net-p2p.js _site/
+          cp vendor/peerjs.min.js _site/vendor/
+
+      # enablement turns GitHub Pages on for this repository if it is still off,
+      # so the site does not need anyone to visit the settings page first
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

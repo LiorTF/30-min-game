@@ -80,6 +80,10 @@ const sendClue = async (page, word, id, field) => {
      !(await host.$eval('[data-set="impostors"][data-val="2"]', el => el.disabled)));
 
   step("settings");
+  /* these suites cover the base game; roles have a suite of their own */
+  await host.click('[data-setstr="roleMode"][data-val="off"]');
+  await wait(300);
+
   await host.click('[data-set="impostors"][data-val="2"]');
   await host.click('[data-set="clueRounds"][data-val="1"]');
   await host.click('[data-set="target"][data-val="8"]');
@@ -149,12 +153,53 @@ const sendClue = async (page, word, id, field) => {
   const k = seatKey(ids[2]);
   store.set(k, Object.assign({}, store.get(k), { score: 9 }));
   await wait(1200);
-  ok("the host is offered the final table", await host.$("#btnChampion") !== null);
+  ok("crossing the target does not end the night", await host.$("#btnChampion") === null);
+  ok("it calls the last trial instead", await host.$("#btnLastTrial") !== null);
+
+  step("the last trial");
+  const before = seatsOf().reduce((m, s2) => (m[s2.id] = s2.score, m), {});
+  await host.click("#btnLastTrial");
+  await host.waitForSelector("#card", { timeout: 8000 });
+  await wait(700);
+  ok("the last trial is marked as such", room().trial === 1, "trial " + room().trial);
+  ok("and every player is told", (await pages[4].$(".trial")) !== null);
+
+  for (let i = 0; i < N; i++) { await pages[i].click("#btnReady"); await wait(90); }
+  await wait(700);
+  const trialWords = ["mu", "nu", "xi", "omicron", "pi", "rho", "tau"];
+  for (let i = 0; i < N; i++) { await sendClue(pages[i], trialWords[i], ids[i], "clue"); }
+  await wait(700);
+
+  /* everyone but the impostors names the first impostor, so the catch is clean */
+  const trialImps = room().impostorIds;
+  for (let i = 0; i < N; i++) {
+    const mine = ids[i];
+    let target = trialImps[0];
+    if (target === mine) target = ids.find(id => trialImps.indexOf(id) === -1);
+    const button = '.pick[data-vote="' + target + '"]';
+    await pages[i].waitForSelector(button + ":not([disabled])", { timeout: 8000 });
+    await pages[i].click(button);
+    await wait(90);
+  }
+  await wait(900);
+  if (room().phase === "guess") {
+    const caughtIdx = ids.indexOf(room().caughtId);
+    await pages[caughtIdx].waitForSelector(".pick--word", { timeout: 8000 });
+    await pages[caughtIdx].click('.pick--word[data-guess="' + room().wordIdx + '"]');
+    await wait(1000);
+  }
+  ok("the last trial reaches a verdict", room().phase === "results", room().phase);
+
+  /* every point in this round must be worth two */
+  const gained = seatsOf().map(s2 => s2.score - (before[s2.id] || 0));
+  ok("every point in the last trial counted double",
+     gained.every(g => g % 2 === 0) && gained.some(g => g > 0), gained.join(","));
+
+  ok("now the night can end", await host.$("#btnChampion") !== null);
   await host.click("#btnChampion");
   await wait(800);
   ok("the match ends on the champion screen", room().phase === "champion", room().phase);
-  ok("the winner is crowned", (await host.textContent(".crown__name")).trim() === "P3",
-     await host.textContent(".crown__name"));
+  ok("the winner is crowned", (await host.textContent(".crown__name")).trim().length > 0);
   ok("earlier rounds are listed", (await host.$$(".log li")).length >= 1);
   await host.screenshot({ path: SHOTS + "/b3-champion.png", fullPage: true });
 

@@ -15,17 +15,55 @@ reveal at once, the table argues, everyone votes.
   worth **2** if right
 - Voted correctly while the table got it wrong → **1 point** anyway
 
-Options the host sets per room: **one, two or three impostors** (a second unlocks at
-seven players, a third at ten), one or two clue rounds, and a target score of 8, 12, 20
-or no finish line. In a two-clue round everyone sees the first clues before writing their second, which
-changes the game completely — the impostor now has something to work with, and the
-rest of the table has to decide how much more to give away.
+### Roles
 
-Works from 3 players up. It is at its best from 7 upward, where two or three impostors
-can hide in the noise — at that size the interface adapts: the roster and the clue list
-tighten, every vote button carries that player's own clues so nobody has to hold twelve
-of them in their head, and the round names whoever is still holding it up instead of
-leaving the table guessing. A round runs about four minutes.
+One asymmetry makes a good round. Five make a game worth playing for years. Roles unlock
+with table size, so a small table stays simple, and each is a single sentence on your own
+card — none of them adds a decision to the round.
+
+| role | from | what you hold |
+| --- | --- | --- |
+| **Impostor** | always | no word, only the category |
+| **Confused** | 5 players | a real word from the category — the *wrong* one, and nobody tells you |
+| **Jester** | 7 players | you win by being voted out (4 points, and the impostor walks) |
+| **Witness** | 8 players | one named player who is definitely not an impostor |
+| **Accomplice** | 9 players | you know who the impostors are, and you win when they do |
+
+The confused is the one that changes the table: their card is indistinguishable from an
+innocent's, so they argue their wrong word with total conviction, and everyone else has
+to work out whether that is a liar or a fool.
+
+The host chooses **none / light / full**. Light adds only the confused.
+
+### The night
+
+Rounds run to a target score. When somebody crosses it the night does not simply end —
+it goes to **the Last Trial**: one final round at double points, where anyone still
+within reach can take it. Then the champion screen.
+
+### The dossier
+
+The table's record, kept on the host's device and published to the room. Players are
+matched by name across nights, so it survives new phones and new sessions.
+
+It tracks who was the impostor and how often they got away with it, every vote in both
+directions, and the clue that fooled the most people. Out of that it awards standing
+titles — **The Snake** (escapes in a row), **The Detective** (best read of the table),
+**The Glass** (caught every time), **The Ghost** (never accused) — and finds the
+running grudge: who votes for whom more than anyone else.
+
+Each verdict also carries one line drawn from all of it: *"Dana walks away for the
+fourth round running"*, *"Yoav voted for Michal — for the eighth time"*. That line is
+the point of the whole feature.
+
+### Word packs
+
+The 200 words are grouped into four packs (Everyday, Head & heart, Culture, Home) so a
+table can choose its own flavour, or retire the ones it knows by heart. Words never
+repeat inside a room until the pack runs out.
+
+Works from 3 players up. It is at its best from 7 upward. A round runs about four
+minutes.
 
 ## Two ways to play
 
@@ -58,14 +96,17 @@ at your own signalling broker rather than the public one, add
 | --- | --- |
 | `index.html` | the standalone page — full document, used for ordinary web hosting |
 | `artifact.html` | the same page as a fragment, for the Claude Artifact host |
+| `styles.css` | the whole visual system, as tokens |
+| `deck.js` | the word deck — 20 categories, 200 words, both languages, grouped into packs |
+| `i18n.js` | every string, written natively in each language |
+| `rules.js` | pure: word selection, vote counting, clue validation, rejoining |
+| `roles.js` | pure: who is dealt what, and what a round is worth |
+| `dossier.js` | the table's long memory — records, titles, the line under each verdict |
 | `net-p2p.js` | transport: peer to peer over WebRTC, host-authoritative |
 | `net-artifact.js` | transport: the Claude artifact database |
+| `app.js` | the host state machine, the views, and event binding |
 | `vendor/peerjs.min.js` | PeerJS 1.5.5 (MIT), served with the game so the public page depends on no CDN |
-| `styles.css` | the whole visual system, as tokens |
-| `deck.js` | the word deck — 20 categories, 200 words, both languages |
-| `i18n.js` | every string, written natively in each language |
-| `rules.js` | pure game logic: word selection, vote counting, scoring, clue validation |
-| `app.js` | networking, the host state machine, views, and event binding |
+| `deck.node.js` | evaluates `deck.js` for the node tests, so they cannot drift from it |
 
 `rules.js` deliberately holds no DOM, no network and no clock, so every decision the
 game makes can be tested directly. `app.js` never talks to a network directly either:
@@ -86,30 +127,34 @@ collide. If the host's device goes quiet for 30 seconds, any other player can ta
 ## Tests
 
 ```
-node tests/rules.test.js      # 63 assertions — scoring, voting, clue validation, the deck
-node tests/play.test.js       # 46 assertions — a full four-player round, end to end
-node tests/play-big.test.js   # 24 assertions — seven players, two impostors, a tied vote
-node tests/play-huge.test.js  # 26 assertions — twelve players, three impostors
-node tests/play-p2p.test.js   # 24 assertions — a full round over real WebRTC
+node tests/rules.test.js      # 70  words, voting, clue validation, rejoining
+node tests/roles.test.js      # 44  role dealing and what each round is worth
+node tests/dossier.test.js    # 35  the table's memory, titles and story lines
+node tests/i18n.test.js       #  8  the copy holds together in both languages
+node tests/play.test.js       # 52  a four-player round, end to end
+node tests/play-big.test.js   # 30  seven players, a tied vote, the last trial
+node tests/play-huge.test.js  # 26  twelve players, three impostors
+node tests/play-roles.test.js # 40  nine players with every role in play
+node tests/play-p2p.test.js   # 26  a full round over real WebRTC
 ```
 
-`play-p2p` starts a signalling broker and a static server of its own, then plays a
-four-player round over real data channels: joining by code, a wrong code being refused,
-a guest trying to forge another player's seat (the host refuses it), and the guests
-being told the room has closed when the host shuts their page.
+323 assertions. The five `play` suites run real browsers — one context per player, all
+sharing a single stand-in for the transport — so rounds are genuinely played through
+every phase rather than simulated.
 
-The three `play` suites run real browsers: one context per player, all of them sharing a
-single in-memory stand-in for the `db` capability (`tests/mock-db.js`), so a round is
-actually played through every phase — cards revealed, clues written and refused, votes
-cast, the impostor's last guess, points awarded, the host walking away and someone else
-taking over. `tests/play.test.js` also writes screenshots of each phase to
-`/tmp/claude-0/shots`.
+`play-p2p` goes further and starts a signalling broker and a static server of its own,
+then plays a round over real data channels, including a guest trying to forge another
+player's seat, which the host refuses.
 
-`deck.node.js` is generated from `deck.js` for the node-side tests:
+The `i18n` suite is there because a missing string renders as a blank button and throws
+nothing: it checks both languages carry the same keys and the same placeholders, that
+every string the views reference exists, and that none is dead weight.
 
-```
-node -e "const fs=require('fs');fs.writeFileSync('deck.node.js',fs.readFileSync('deck.js','utf8').replace('window.SUSPECT_DECK =','module.exports ='))"
-```
+## Continuous integration
+
+`.github/workflows/pages.yml` runs the four browser-free suites on every push, then
+publishes the game to GitHub Pages. The publish step enables Pages for the repository
+itself, so the site does not need anyone to visit the settings page first.
 
 ## Design
 

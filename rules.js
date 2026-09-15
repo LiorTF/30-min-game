@@ -15,17 +15,22 @@
 var Rules = {
   /* Pick a word the room has not used yet, avoiding the previous
      category so consecutive rounds don't feel repetitive. */
-  pickWord: function (used, lastCat) {
+  pickWord: function (used, lastCat, allowed) {
     var pool = [];
+    var ok = function (c) { return !allowed || !allowed.length || allowed.indexOf(c) !== -1; };
     for (var c = 0; c < DECK.length; c++) {
-      if (DECK.length > 1 && c === lastCat) continue;
+      if (!ok(c)) continue;
+      if (DECK.length > 1 && c === lastCat && Rules.catCount(allowed) > 1) continue;
       for (var w = 0; w < DECK[c].w.length; w++) {
         if (used.indexOf(c + ":" + w) === -1) pool.push([c, w]);
       }
     }
     if (!pool.length) {
-      /* every word used — start the deck over */
-      c = Math.floor(Math.random() * DECK.length);
+      /* every word in the chosen packs is used — start them over */
+      var cats = [];
+      for (var i = 0; i < DECK.length; i++) if (ok(i)) cats.push(i);
+      if (!cats.length) for (i = 0; i < DECK.length; i++) cats.push(i);
+      c = cats[Math.floor(Math.random() * cats.length)];
       return { cat: c, word: Math.floor(Math.random() * DECK[c].w.length), wrapped: true };
     }
     var hit = pool[Math.floor(Math.random() * pool.length)];
@@ -167,7 +172,38 @@ var Rules = {
     out.clue2 = prev.clue2 || "";
     out.vote = prev.vote || "";
     out.delta = prev.delta == null ? null : prev.delta;
+    out.seatRound = prev.seatRound || 0;
     return out;
+  },
+
+  /* How many categories the chosen packs actually cover. */
+  catCount: function (allowed) {
+    if (!allowed || !allowed.length) return DECK.length;
+    return allowed.length;
+  },
+
+  /* Category indices covered by a list of pack ids. An empty choice means
+     the whole deck, so a table that turns everything off still plays. */
+  catsForPacks: function (packIds, packs) {
+    packs = packs || (typeof window !== "undefined" ? window.SUSPECT_PACKS : null) || [];
+    if (!packIds || !packIds.length) return [];
+    var wanted = {};
+    packs.forEach(function (p) {
+      if (packIds.indexOf(p.id) === -1) return;
+      p.cats.forEach(function (c) { wanted[c] = true; });
+    });
+    var out = [];
+    for (var i = 0; i < DECK.length; i++) if (wanted[DECK[i].id]) out.push(i);
+    return out;
+  },
+
+  /* How many words a pack choice puts in play — shown in the lobby. */
+  wordsAvailable: function (allowed) {
+    var n = 0;
+    for (var i = 0; i < DECK.length; i++) {
+      if (!allowed || !allowed.length || allowed.indexOf(i) !== -1) n += DECK[i].w.length;
+    }
+    return n;
   },
 
   code: function () {
